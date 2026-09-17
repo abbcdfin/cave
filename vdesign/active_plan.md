@@ -5,7 +5,7 @@ Build an exploratory `bwrap` spike script in `vdesign/utils/spike-bwrap.sh` to v
 
 ## Tasks
 
-- [ ] **1.1: Host Environment Discovery**
+- [x] **1.1: Host Environment Discovery**
   - Check `bwrap` installation and unprivileged user namespace availability.
   - Locate `claude` and examine its runtime dependencies (`which claude`, Node/nvm paths, env vars).
 - [ ] **1.2: Home Directory Classification Matrix**
