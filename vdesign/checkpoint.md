@@ -1,10 +1,9 @@
 # Checkpoint
 
 ## Current State
-- Updated [`README.md`](../README.md) with cave's vision, core YOLO value proposition, identical terminal UX, and target workflow (`cave claude -c`).
-- Documented What & Why in [`docs/product_specification.md`](../docs/product_specification.md).
-- Documented architectural topology and isolation candidates in [`docs/architecture_design.md`](../docs/architecture_design.md).
-- Established 4-phase initial roadmap in [`vdesign/plan.md`](plan.md).
+- Scope decided 2026-09-17, recorded in [`docs/product_specification.md`](../docs/product_specification.md) › Scope: clumsy-agent threat model, file boundary, Linux only, no injected agent flags, `--dir` / `--ro-dir` / `--doctor`, allowed directories at host paths.
+- Roadmap restructured into spike → walking skeleton → agent profiles in [`plan.md`](plan.md); rationale and backend selection criteria in [`docs/architecture_design.md`](../docs/architecture_design.md).
+- No code yet.
 
 ## Next Steps
-- Review Phase 1 isolation technology selection (e.g. `bwrap` vs. Docker/Podman) and language/toolchain choice for the `cave` CLI (e.g., Rust, Go, or Python).
+- Start Phase 1: build the `bwrap` spike in `vdesign/utils/` and measure it against the selection criteria.

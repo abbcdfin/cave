@@ -3,26 +3,51 @@
 ## What & Why
 
 ### The Problem
-Autonomous coding agents (e.g. Claude Code, Antigravity/AGY, Aider, Codex) are significantly faster when permitted to execute shell commands, edit files, and run tests without manual confirmation prompts for every action ("YOLO mode"). However, running unvetted LLM agent commands directly on the developer's host machine introduces serious risks:
-- Accidental destruction or modification of files outside the project tree (`~/.ssh`, `~/.aws`, system directories).
-- Untrusted script execution or credential leakage.
+Autonomous coding agents (e.g. Claude Code, Antigravity/AGY, Aider, Codex) are significantly faster when permitted to execute shell commands, edit files, and run tests without manual confirmation prompts for every action ("YOLO mode"). However, an agent running unattended on the developer's host makes mistakes whose damage reaches beyond the project:
+- Reading, modifying, or deleting files outside the project (`~/.ssh`, `~/.aws`, other repositories, system directories).
 - Process sprawl and untracked system modifications.
 
 Conversely, manual confirmation prompts destroy developer flow and create cognitive fatigue, severely slowing down agentic development.
 
 ### The Solution
-`cave` is a transparent sandbox runner for coding agents. It wraps agent invocations (e.g. `cave claude -c`), confining execution to an isolated, least-privilege environment scoped strictly to the current workspace, while retaining the exact interactive terminal UX (colors, key bindings, TTY/PTY ergonomics) of the host system.
+`cave` is a transparent sandbox runner for coding agents. It wraps agent invocations (e.g. `cave claude --dangerously-skip-permissions`), confining file access to the allowed directories, while retaining the exact interactive terminal UX (colors, key bindings, TTY/PTY ergonomics) of the host system.
+
+## Scope
+
+Decided 2026-09-17.
+
+### Threat model: a clumsy agent
+cave protects against an agent that *accidentally* reaches files outside the allowed directories — a wrong path, an overbroad `rm`, a global config write. It is not a defence against an agent deliberately escaping or exfiltrating data.
+
+- **Allowed directories** — the working directory, the agent's own state (e.g. `~/.claude`), and any directory the user adds — are the only host files the agent can access: read-write, except directories the user adds read-only.
+- **Host runtime** — the OS and toolchain paths the agent needs to run (`/usr`, `/etc`, …) — is readable, never writable.
+- **Everything else is hidden**, including the rest of the home directory and the host's `/tmp` and `/run` (the sandbox gets private ones).
+- Ordinary commands that reach host files through a service count as file access, so those services are hidden too: the Docker socket (`docker run -v /:/host`) and the user session bus (`systemctl --user`).
+
+Out of scope:
+- Deliberate escapes: terminal input injection, `/proc` traversal, abstract-socket abuse.
+- Network egress: the agent can send the contents of allowed directories, or its own credentials, anywhere. Filtering remains a candidate.
+- Damage inside the allowed directories. Snapshotting remains a candidate.
+
+### Platform
+Linux only for now. Other platforms may follow.
+
+### Invocation
+`cave [cave-options] <agent> [args...]`: cave options come first; everything from the agent command on passes through unchanged.
+
+- cave adds no agent flags. YOLO mode is enabled by the user passing the agent's own flag (`cave claude --dangerously-skip-permissions`), keeping that choice under the user's control.
+- Extra allowed directories are added with `--dir PATH` (read-write) or `--ro-dir PATH` (read-only), repeatable. Every allowed directory appears at its host path, so relative paths between them, absolute paths inside projects, and agent state keyed by path (`~/.claude/projects/<cwd>/`) all stay valid. There are no custom target paths. A config file may follow later.
+- cave's own commands are options (`cave --doctor`), so no agent command name is reserved.
 
 ## Key Requirements
 
 1. **Host-Identical Terminal UX**:
    - Full TTY/PTY forwarding, handling signals (`SIGINT`, `SIGWINCH`), escape sequences, and interactive prompts seamlessly.
 2. **Transparent Invocations**:
-   - Syntax mirrors host execution: `cave <agent> [args...]`.
-3. **Restricted Boundary**:
-   - Workspace isolation: Read/write restricted to current workspace/project directory.
-   - Host isolation: Sensitive host directories (`~/.ssh`, `~/.gnupg`, `/etc`, host root) blocked or read-only mock.
-   - Config & Auth Passthrough: Controlled forwarding of required API keys and agent configurations without exposing raw host secrets.
+   - Syntax mirrors host execution, as defined in Scope › Invocation.
+3. **File Boundary**:
+   - Enforces the boundary defined in Scope.
+   - Agent state stays usable, so native login and session resume (`claude -c`) work.
 4. **Minimal Overhead**:
    - Instant startup (< 100ms) to feel like a native local binary rather than a sluggish virtual machine.
 

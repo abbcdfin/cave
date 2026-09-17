@@ -1,6 +1,6 @@
 # cave
 
-Run coding agents autonomously in **YOLO mode** without putting your host system at risk.
+Run coding agents autonomously in **YOLO mode** on Linux without putting files outside your project at risk.
 
 `cave` transparently sandboxes coding agents (such as Claude Code, Antigravity, Aider) in a restricted environment so you can run them with auto-approvals enabled, while preserving the exact interactive terminal experience as if running directly on your host.
 
@@ -16,14 +16,14 @@ Invoke `cave` followed by the agent CLI command and its arguments:
 
 ```bash
 # Launch Claude Code in YOLO / auto-approve mode inside the cave sandbox
-cave claude -c
+cave claude --dangerously-skip-permissions
 
 # Launch other agents with their respective arguments
 cave agy
 cave aider --architect
 ```
 
-The terminal opens directly into the agent session in your current working directory.
+The terminal opens directly into the agent session in your current working directory. cave passes agent arguments through unchanged: YOLO mode is on only when you pass the agent's own flag.
 
 ## CLI Syntax
 
@@ -31,13 +31,17 @@ The terminal opens directly into the agent session in your current working direc
 cave [cave-options] <agent-command> [agent-arguments...]
 ```
 
+cave options must come before the agent command; everything from the agent command on is passed to the agent unchanged.
+
 ### Common Commands
 
 | Invocation | Action |
 | :--- | :--- |
-| `cave claude -c` | Runs Claude Code with auto-continue in the sandboxed CWD |
+| `cave claude --dangerously-skip-permissions` | Runs Claude Code in YOLO mode, sandboxed to the CWD |
 | `cave <agent>` | Runs the specified agent command inside the isolated environment |
-| `cave doctor` | Inspects sandbox backend availability and permissions |
+| `cave --dir ../shared-lib claude` | Also allows read-write access to `../shared-lib` |
+| `cave --ro-dir ~/reference claude` | Also allows read-only access to `~/reference` |
+| `cave --doctor` | Inspects sandbox backend availability and permissions |
 
 ## Architecture & Roadmap
 
