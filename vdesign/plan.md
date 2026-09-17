@@ -4,7 +4,7 @@
 
 Rationale: `docs/architecture_design.md` › Delivery Approach.
 
-- [ ] Phase 1: Backend Spike & Decision
+- [/] Phase 1: Backend Spike & Decision
   - Build a throwaway `bwrap` spike in `vdesign/utils/` that runs `claude` inside the boundary from `docs/product_specification.md` › Scope.
   - Measure it against the selection criteria in `docs/architecture_design.md` › Isolation Engine.
   - List the home paths agents and their toolchains need (e.g. `~/.local/bin/claude`, `~/.claude/`, `~/.cargo`, `~/.nvm`, `~/.cache`) and classify each as agent state (RW), runtime (RO), or hidden.
