@@ -6,8 +6,8 @@ Rationale: `docs/architecture_design.md` › Delivery Approach.
 
 - [x] Phase 1: Backend Spike & Decision
   - Outcome: Bubblewrap (`bwrap`) selected as isolation backend (9.28 ms startup overhead, rootless, clean tmpfs masking). Direct terminal inheritance selected (native signals/TTY passthrough, no relay). Rust selected as CLI implementation language (<2ms overhead, single static binary, `CommandExt::exec` process replacement). Loosely coupled to external `bwrap`. Reusing host `/tmp` supported via `--dir /tmp`. Spike script preserved at `vdesign/utils/spike-bwrap.sh`; path classification in `docs/architecture_design.md` › Filesystem & Environment Policy.
-  - Review (2026-09-18) reopened three items for Phase 2: clear the environment or drop the unused `--setenv` curation; make an explicitly allowed path override the default masking generally, rather than special-casing `/tmp`; classify `~/.cache` and `~/.config`. Untested: interactive `claude`, resize, Ctrl-Z, and any distro that restricts unprivileged user namespaces.
-- [ ] Phase 2: Walking Skeleton — `cave claude`
+  - Review (2026-09-18) reopened three items (environment handling, a general override rule instead of the `/tmp` special case, `~/.cache` / `~/.config`), settled the same day with agent profile selection in `docs/architecture_design.md` › Filesystem & Environment Policy. Untested: interactive `claude`, resize, Ctrl-Z (Phase 2 task 2.0), and any distro that restricts unprivileged user namespaces (Phase 3 `--doctor`).
+- [/] Phase 2: Walking Skeleton — `cave claude` (board: `active_plan.md`)
   - Write the boundary tests first: reads and writes outside allowed directories, symlinks pointing outside, `git config --global`, writes under `--ro-dir` and host runtime, host `/tmp` visibility, `docker ps` and `systemctl --user` reaching the host, ownership of files created in allowed directories.
   - Implement option parsing, `--dir` / `--ro-dir`, host-path mounts, hidden home, private `/tmp` and `/run`, read-only host runtime, and the Phase 1 terminal approach.
   - Define the agent profile format; Claude Code is the first profile.
@@ -21,6 +21,7 @@ Rationale: `docs/architecture_design.md` › Delivery Approach.
 <!-- Unnumbered DRAFT ideas awaiting validation -->
 - Candidate: Network policy filtering (allowlist API endpoints, block local LAN/intranet).
 - Candidate: Ephemeral git branch / copy-on-write snapshotting before agent execution.
-- Candidate: Config file for extra allowed directories, complementing the CLI options.
+- Candidate: Config file for extra allowed directories, complementing the CLI options, and for user-defined agent profiles (agents cave doesn't ship, or overrides of built-in ones) in the same TOML schema as the built-in profiles.
+- Candidate: `--profile NAME` option to choose an agent profile explicitly. Selection by command basename misses agents launched through wrappers (`cave npx @anthropic-ai/claude-code`, `cave uv run aider` select `npx` / `uv`).
 - Candidate: Custom target paths (`--dir SRC:DEST`, `--workdir DEST`). Deferred 2026-09-17 in favour of host paths; revisit only for a concrete need. Known costs: breaks relative paths between directories (`/work/../lib` lands on `/lib`), path-keyed agent state (`claude -c`), and absolute paths inside projects (venvs, worktrees).
 - Candidate: Opt-in Docker access for projects whose agents need `docker compose`; the socket is hidden by default (see `docs/product_specification.md` › Scope).

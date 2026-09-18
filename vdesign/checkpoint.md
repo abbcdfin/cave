@@ -7,6 +7,7 @@
   - Path classification moved out of the collapsed active plan into the architecture doc.
 - No code yet.
 
+- Phase 2 planned 2026-09-18: the four open policy decisions (environment, mount-order override rule, `~/.cache` / `~/.config`, agent profile selection) are recorded in `docs/architecture_design.md`; the board is in [`active_plan.md`](active_plan.md).
+
 ## Next Steps
-- Re-run the spike to confirm the added mounts: `cargo --version`, `claude --version`, name resolution, `/var/tmp` writable, `/var` read-only.
-- Start Phase 2 (Walking Skeleton: `cave claude` in Rust, boundary tests first), settling the three items reopened by the review in `plan.md`.
+- Phase 2 task 2.0: re-run the spike and test `claude` interactively (resize, Ctrl-C, Ctrl-Z, `claude -c`) before writing code.

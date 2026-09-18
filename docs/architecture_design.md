@@ -46,29 +46,31 @@
 3. **Filesystem & Environment Policy**:
    - Boundary: defined in [product_specification.md › Scope](product_specification.md#scope).
    - Allowed directories: bind-mounted at their host paths with matching host UID/GID; read-write, or read-only for `--ro-dir`.
-   - `/tmp` and `/run`: private ephemeral `tmpfs` by default. If `--dir /tmp` or `--ro-dir /tmp` is passed, the private tmpfs is skipped and the host's `/tmp` is bind-mounted directly.
-   - Path classification (Phase 1 spike, host-verified):
+   - Mount order (decided 2026-09-18): engine defaults, then the agent profile, then the working directory, then `--dir` / `--ro-dir` in command-line order. A later mount covers an earlier one at the same path, so any explicitly allowed path overrides the default for that path with no special cases: `--dir /tmp` shows the host's `/tmp`, `--ro-dir .` makes the working directory read-only. cave warns on `--dir /` and `--dir ~`, which undo the boundary.
+   - Path classification (runtime and state rows verified by the Phase 1 spike):
 
      | Class | Paths |
      | :--- | :--- |
-     | Agent state (RW) | `~/.claude/`, `~/.claude.json` — persist, so login and `claude -c` work |
-     | Host runtime (RO) | `/usr`, `/etc`, `/bin`, `/sbin`, `/lib*`, `/opt`, `/var`, `/sys`; toolchains installed in home: `~/.local/bin`, `~/.local/share/claude`, `~/.cargo/bin`, `~/.rustup`, `~/.npm_global`, `~/.gitconfig` |
+     | Host runtime (RO) | `/usr`, `/etc`, `/bin`, `/sbin`, `/lib*`, `/opt`, `/var`, `/sys`; toolchains installed in home: `~/.local/bin`, `~/.cargo/bin`, `~/.rustup`, `~/.gitconfig` |
+     | Shared tool caches (RW) | `~/.cache`, and caches kept elsewhere: `~/.cargo/registry`, `~/.cargo/git`, `~/.npm` — disposable, and hiding them repeats every download (decided 2026-09-18) |
      | Private tmpfs | `$HOME`, `/tmp`, `/run`, `/var/tmp` |
-     | Hidden | everything else, including `~/.ssh`, `~/.gnupg`, `~/.docker`, `/run/docker.sock`, `/run/user/$UID/bus` |
-     | Open, Phase 2 decides | `~/.cache`, `~/.config` — hidden today, so every download repeats and config writes vanish silently |
+     | Hidden | everything else, including `~/.config`, `~/.ssh`, `~/.gnupg`, `~/.docker`, `/run/docker.sock`, `/run/user/$UID/bus`. `~/.config` holds tokens and host tool settings a clumsy agent could clobber; agent profiles may allow specific subpaths read-only (decided 2026-09-18) |
+     | Agent profile | per agent. Claude Code: state `~/.claude/`, `~/.claude.json` (RW, so login and `claude -c` work); runtime `~/.local/share/claude` (RO) |
+
+   - Machine-specific toolchain paths (e.g. a custom npm prefix such as `~/.npm_global`) are not defaults. Pass them with `--ro-dir`, or with a shell alias (`alias cave='cave --ro-dir ~/.npm_global'`) until the config-file candidate lands.
 
    - DNS: `/etc/resolv.conf` is a symlink into `/run` on systemd-resolved hosts, so the file it resolves to is bound read-only over it, keeping `/run` private. `--doctor` verifies resolution by resolving a name inside the sandbox.
    - `/var` is bound read-only on the assumption that `/var/run` is a symlink to `/run`. Where a distro still makes it a real directory, the Docker socket returns through that bind; `--doctor` checks this.
-   - Agent state is the per-agent part of this table and becomes profile data; the other classes are engine defaults.
+   - Environment (decided 2026-09-18): the host environment passes through, minus variables that point at hidden sockets (`SSH_AUTH_SOCK`, `DBUS_SESSION_BUS_ADDRESS`); `XDG_RUNTIME_DIR` points at a private `/run/user/$UID` (`0700`). An allowlist would never cover every toolchain variable (`JAVA_HOME`, `CARGO_HOME`, `NVM_DIR`, proxies), and environment secrets are not files, so they are outside the clumsy-agent scope.
    - Network: outbound network enabled for API calls and package downloads.
-   - Agent profiles: each agent's state paths and environment, declared as data and interpreted by one engine. Adding an agent is a data change; the format is backend-independent, so a future platform adds a backend, not new profiles.
+   - Agent profiles (decided 2026-09-18): each agent's state paths (RW), runtime paths and `~/.config` subpaths (RO), declared as data and interpreted by one engine. Built-in profiles are compiled into the binary and selected by the agent command's basename (`~/.local/bin/claude` → `claude`); an unknown command gets the engine defaults only. Adding an agent is a data change; the format is backend-independent, so a future platform adds a backend, not new profiles.
 
 ## Spike Outcomes & Decisions
 
 Decided 2026-09-18 at Phase 1 Decision Check Point:
 - **Isolation Engine**: Bubblewrap (`bwrap`) selected. Measured startup overhead of 9.28 ms (well within < 100ms threshold), zero root/daemon requirements, cleanly hides `/tmp` and `$HOME` with tmpfs.
 - **Terminal Model**: Direct Terminal Inheritance selected. `bwrap` inherits controlling terminal descriptors directly (`isatty: True`); resize (`SIGWINCH`), Ctrl-C (`SIGINT`), and colors pass natively without an intermediary PTY relay.
-- **Host /tmp Reuse**: Reusing host `/tmp` is supported strictly via the explicit `--dir /tmp` (or `--ro-dir /tmp`) option, which replaces the default private tmpfs.
+- **Host /tmp Reuse**: Reusing host `/tmp` is supported strictly via the explicit `--dir /tmp` (or `--ro-dir /tmp`) option, which replaces the default private tmpfs. Generalized 2026-09-18 into the mount-order rule: every explicitly allowed path overrides the default for that path.
 - **Implementation Language**: Rust selected. Near-zero process startup (< 2ms overhead), single static binary distribution with no runtime dependencies, type-safe CLI and profile data models, and direct kernel process replacement via `std::os::unix::process::CommandExt::exec`.
 - **Backend Coupling**: `cave` orchestrates `bwrap` as a loosely-coupled external backend rather than re-implementing or embedding namespace syscalls in Rust. Preserves security auditing, avoids complex kernel mount edge cases, and retains future backend flexibility.
 

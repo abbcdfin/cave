@@ -21,7 +21,8 @@ cave protects against an agent that *accidentally* reaches files outside the all
 
 - **Allowed directories** — the working directory, the agent's own state (e.g. `~/.claude`), and any directory the user adds — are the only host files the agent can access: read-write, except directories the user adds read-only.
 - **Host runtime** — the OS and toolchain paths the agent needs to run (`/usr`, `/etc`, …) — is readable, never writable.
-- **Everything else is hidden**, including the rest of the home directory and the host's `/tmp` and `/run` (the sandbox gets private ones).
+- **Shared tool caches** (`~/.cache`, and caches such as `~/.cargo/registry` kept elsewhere) are read-write: they are disposable, and hiding them repeats every download.
+- **Everything else is hidden**, including the rest of the home directory (`~/.config` too) and the host's `/tmp` and `/run` (the sandbox gets private ones).
 - Ordinary commands that reach host files through a service count as file access, so those services are hidden too: the Docker socket (`docker run -v /:/host`) and the user session bus (`systemctl --user`).
 
 Out of scope:
@@ -36,7 +37,7 @@ Linux only for now. Other platforms may follow.
 `cave [cave-options] <agent> [args...]`: cave options come first; everything from the agent command on passes through unchanged.
 
 - cave adds no agent flags. YOLO mode is enabled by the user passing the agent's own flag (`cave claude --dangerously-skip-permissions`), keeping that choice under the user's control.
-- Extra allowed directories are added with `--dir PATH` (read-write) or `--ro-dir PATH` (read-only), repeatable. Every allowed directory appears at its host path, so relative paths between them, absolute paths inside projects, and agent state keyed by path (`~/.claude/projects/<cwd>/`) all stay valid. There are no custom target paths. Passing `--dir /tmp` or `--ro-dir /tmp` is supported and overrides the private `/tmp` tmpfs, bind-mounting the host's `/tmp` into the sandbox. A config file may follow later.
+- Extra allowed directories are added with `--dir PATH` (read-write) or `--ro-dir PATH` (read-only), repeatable. Every allowed directory appears at its host path, so relative paths between them, absolute paths inside projects, and agent state keyed by path (`~/.claude/projects/<cwd>/`) all stay valid. There are no custom target paths. An explicitly allowed path overrides the default for that path: `--dir /tmp` shows the host's `/tmp`, and `--ro-dir .` makes the working directory read-only. cave warns on `--dir /` and `--dir ~`, which undo the boundary. A config file may follow later.
 - cave's own commands are options (`cave --doctor`), so no agent command name is reserved.
 
 ## Key Requirements
