@@ -46,9 +46,17 @@
 3. **Filesystem & Environment Policy**:
    - Boundary: defined in [product_specification.md › Scope](product_specification.md#scope).
    - Allowed directories: bind-mounted at their host paths with matching host UID/GID; read-write, or read-only for `--ro-dir`.
+   - `/tmp` and `/run`: private ephemeral `tmpfs` by default. If `--dir /tmp` or `--ro-dir /tmp` is passed, the private tmpfs is skipped and the host's `/tmp` is bind-mounted directly.
    - Home directory: hidden except the agent's state paths (`~/.claude/`, `~/.claude.json`), which persist read-write.
    - Network: outbound network enabled for API calls and package downloads.
    - Agent profiles: each agent's state paths and environment, declared as data and interpreted by one engine. Adding an agent is a data change; the format is backend-independent, so a future platform adds a backend, not new profiles.
+
+## Spike Outcomes & Decisions
+
+Decided 2026-09-18 at Phase 1 Decision Check Point:
+- **Isolation Engine**: Bubblewrap (`bwrap`) selected. Measured startup overhead of 9.28 ms (well within < 100ms threshold), zero root/daemon requirements, cleanly hides `/tmp` and `$HOME` with tmpfs.
+- **Terminal Model**: Direct Terminal Inheritance selected. `bwrap` inherits controlling terminal descriptors directly (`isatty: True`); resize (`SIGWINCH`), Ctrl-C (`SIGINT`), and colors pass natively without an intermediary PTY relay.
+- **Host /tmp Reuse**: Reusing host `/tmp` is supported strictly via the explicit `--dir /tmp` (or `--ro-dir /tmp`) option, which replaces the default private tmpfs.
 
 ## Delivery Approach
 
