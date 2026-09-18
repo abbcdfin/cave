@@ -29,7 +29,7 @@
 
 1. **CLI & Process Dispatcher**:
    - Parses `cave` options, which precede the agent command, and passes everything from the agent command on unchanged.
-   - Terminal: the agent uses the host terminal directly, or through a PTY relay; decided in Phase 1.
+   - Terminal: the agent uses the host terminal directly, with no PTY relay (Phase 1 outcome).
 2. **Isolation Engine**:
    - Selection criteria:
      - Enforces the Scope boundary by hiding, not just denying: private `/tmp` and `/run`, hidden home.
@@ -47,7 +47,19 @@
    - Boundary: defined in [product_specification.md › Scope](product_specification.md#scope).
    - Allowed directories: bind-mounted at their host paths with matching host UID/GID; read-write, or read-only for `--ro-dir`.
    - `/tmp` and `/run`: private ephemeral `tmpfs` by default. If `--dir /tmp` or `--ro-dir /tmp` is passed, the private tmpfs is skipped and the host's `/tmp` is bind-mounted directly.
-   - Home directory: hidden except the agent's state paths (`~/.claude/`, `~/.claude.json`), which persist read-write.
+   - Path classification (Phase 1 spike, host-verified):
+
+     | Class | Paths |
+     | :--- | :--- |
+     | Agent state (RW) | `~/.claude/`, `~/.claude.json` — persist, so login and `claude -c` work |
+     | Host runtime (RO) | `/usr`, `/etc`, `/bin`, `/sbin`, `/lib*`, `/opt`, `/var`, `/sys`; toolchains installed in home: `~/.local/bin`, `~/.local/share/claude`, `~/.cargo/bin`, `~/.rustup`, `~/.npm_global`, `~/.gitconfig` |
+     | Private tmpfs | `$HOME`, `/tmp`, `/run`, `/var/tmp` |
+     | Hidden | everything else, including `~/.ssh`, `~/.gnupg`, `~/.docker`, `/run/docker.sock`, `/run/user/$UID/bus` |
+     | Open, Phase 2 decides | `~/.cache`, `~/.config` — hidden today, so every download repeats and config writes vanish silently |
+
+   - DNS: `/etc/resolv.conf` is a symlink into `/run` on systemd-resolved hosts, so the file it resolves to is bound read-only over it, keeping `/run` private. `--doctor` verifies resolution by resolving a name inside the sandbox.
+   - `/var` is bound read-only on the assumption that `/var/run` is a symlink to `/run`. Where a distro still makes it a real directory, the Docker socket returns through that bind; `--doctor` checks this.
+   - Agent state is the per-agent part of this table and becomes profile data; the other classes are engine defaults.
    - Network: outbound network enabled for API calls and package downloads.
    - Agent profiles: each agent's state paths and environment, declared as data and interpreted by one engine. Adding an agent is a data change; the format is backend-independent, so a future platform adds a backend, not new profiles.
 

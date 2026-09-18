@@ -27,14 +27,24 @@ BWRAP_ARGS=(
     # Base system (read-only)
     --ro-bind /usr /usr
     --ro-bind /etc /etc
+    --ro-bind /var /var
+    --ro-bind /sys /sys
+
+    # Writable scratch that is never the host's
+    --tmpfs /var/tmp
 )
 
 # Optional system symlinks/dirs
-for sysdir in /bin /sbin /lib /lib64 /lib32; do
+for sysdir in /bin /sbin /lib /lib64 /lib32 /opt; do
     if [ -e "$sysdir" ]; then
         BWRAP_ARGS+=(--ro-bind "$sysdir" "$sysdir")
     fi
 done
+
+# DNS: bind the file /etc/resolv.conf resolves to, so /run stays private
+if [ -e /etc/resolv.conf ]; then
+    BWRAP_ARGS+=(--ro-bind "$(readlink -f /etc/resolv.conf)" /etc/resolv.conf)
+fi
 
 # Ephemeral private $HOME
 BWRAP_ARGS+=(--tmpfs "$REAL_HOME")
@@ -44,6 +54,7 @@ for ro_path in \
     "$REAL_HOME/.local/bin" \
     "$REAL_HOME/.local/share/claude" \
     "$REAL_HOME/.cargo/bin" \
+    "$REAL_HOME/.rustup" \
     "$REAL_HOME/.npm_global" \
     "$REAL_HOME/.gitconfig"
 do
