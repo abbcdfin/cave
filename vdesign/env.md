@@ -1,7 +1,11 @@
 # Environment & Tooling
 
 ## Toolchains
-- **Python**: Default toolchain is `uv` (use `uv run ...`, `uv pip ...`).
+- **Rust**: Primary language for the `cave` CLI binary (`cargo`, `rustc` 1.94+).
+- **Python**: Default toolchain is `uv` (`uv run ...`, `uv pip ...`) when Python scripts or tools are utilized.
+
+## Sandbox Dependency
+- **Bubblewrap**: `/usr/bin/bwrap` required on the host system.
 
 ## Script Placement
 - Exploratory, supportive, or throwaway scripts belong in `./vdesign/utils/`, never in the production tree.

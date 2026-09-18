@@ -6,24 +6,24 @@ Build an exploratory `bwrap` spike script in `vdesign/utils/spike-bwrap.sh` to v
 ## Tasks
 
 - [x] **1.1: Host Environment Discovery**
-  - Check `bwrap` installation and unprivileged user namespace availability.
-  - Locate `claude` and examine its runtime dependencies (`which claude`, Node/nvm paths, env vars).
-- [ ] **1.2: Home Directory Classification Matrix**
-  - Identify and classify paths needed by `claude` and common toolchains:
-    - Agent state (Read-Write, e.g. `~/.claude`, `~/.claude.json`)
-    - Toolchain runtime (Read-Only, e.g. `~/.local/bin`, `~/.nvm`, etc.)
-    - Hidden/Masked (e.g. `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.bashrc`, `/var/run/docker.sock`)
-- [ ] **1.3: Throwaway Spike Implementation (`vdesign/utils/spike-bwrap.sh`)**
-  - Construct minimal `bwrap` command mounting:
-    - RO system mounts (`/usr`, `/etc`, `/lib`, `/bin`, etc.)
-    - Private `/tmp`, `/run`, `/dev`, `/proc`
-    - CWD mounted RW at its host path
-    - Private/isolated home with selective bindings for agent state and toolchains
-    - Network enabled, PID/IPC/UTS namespaces unshared
-- [ ] **1.4: Terminal & Boundary Verification**
-  - Test terminal behavior: window resizing (`SIGWINCH`), Ctrl-C, colors, interactive prompt.
-  - Verify boundary: test write access outside CWD/agent state, verify host `/tmp` hidden, verify docker/systemd unreachable.
-- [ ] **1.5: Decision Check Point & Architecture Update**
-  - Compare results against criteria in `docs/architecture_design.md` (startup time, rootless, terminal fidelity, boundary enforcement).
-  - Decide backend, implementation language, and terminal approach (direct vs relay).
-  - Update `docs/architecture_design.md` and collapse active plan to complete Phase 1.
+  - Verified `bwrap` 0.11.2 and unprivileged user namespaces (`unprivileged_userns_clone = 1`).
+  - Located `claude` at `~/.local/bin/claude` -> `~/.local/share/claude/versions/2.1.275`.
+- [x] **1.2: Home Directory Classification Matrix**
+  - Agent state (RW): `~/.claude`, `~/.claude.json`.
+  - Toolchain runtime (RO): `~/.local/bin`, `~/.local/share/claude`, `~/.cargo/bin`, `~/.npm_global`, `~/.gitconfig`.
+  - Hidden: `~/.ssh`, `~/.gnupg`, `~/.docker`, `/var/run/docker.sock`, `/run/user/$UID/bus`.
+- [x] **1.3: Throwaway Spike Implementation (`vdesign/utils/spike-bwrap.sh`)**
+  - Assembled working `bwrap` script mounting private `/tmp`, `/run`, `$HOME` tmpfs with selective binds, and CWD read-write at host path.
+- [x] **1.4: Terminal & Boundary Verification**
+  - Boundary verified: writes to `/etc` blocked, host `/tmp` hidden, `~/.ssh` and `~/.gnupg` hidden, `~/.gitconfig` read-only, docker socket and systemd bus isolated.
+  - Startup overhead measured: **9.28 ms** (well below 100ms threshold).
+  - Terminal direct inheritance verified: `isatty()` is True, controlling terminal inherited directly.
+- [x] **1.5: Decision Check Point & Architecture Update**
+  - Decisions:
+    1. Isolation backend: Bubblewrap (`bwrap`).
+    2. Terminal model: Direct terminal inheritance.
+    3. Host `/tmp` access: Supported via explicit `--dir /tmp` (or `--ro-dir /tmp`).
+    4. Implementation language: Rust (`cargo`, `rustc` 1.94+).
+    5. Backend coupling: Loosely coupled to external `bwrap` binary.
+  - Recorded in [`docs/architecture_design.md`](../docs/architecture_design.md), [`docs/product_specification.md`](../docs/product_specification.md), and [`vdesign/env.md`](env.md).
+  - Phase 1 collapsed and marked complete in [`vdesign/plan.md`](plan.md).

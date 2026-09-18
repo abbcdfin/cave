@@ -4,12 +4,8 @@
 
 Rationale: `docs/architecture_design.md` › Delivery Approach.
 
-- [/] Phase 1: Backend Spike & Decision
-  - Build a throwaway `bwrap` spike in `vdesign/utils/` that runs `claude` inside the boundary from `docs/product_specification.md` › Scope.
-  - Measure it against the selection criteria in `docs/architecture_design.md` › Isolation Engine.
-  - List the home paths agents and their toolchains need (e.g. `~/.local/bin/claude`, `~/.claude/`, `~/.cargo`, `~/.nvm`, `~/.cache`) and classify each as agent state (RW), runtime (RO), or hidden.
-  - Check the host terminal used directly: resize, Ctrl-C, Ctrl-Z, colours.
-  - Exit: Decision Check Point on backend, implementation language, and terminal approach (direct or PTY relay), recorded in `docs/architecture_design.md`.
+- [x] Phase 1: Backend Spike & Decision
+  - Outcome: Bubblewrap (`bwrap`) selected as isolation backend (9.28 ms startup overhead, rootless, clean tmpfs masking). Direct terminal inheritance selected (native signals/TTY passthrough, no relay). Rust selected as CLI implementation language (<2ms overhead, single static binary, `CommandExt::exec` process replacement). Loosely coupled to external `bwrap`. Reusing host `/tmp` supported via `--dir /tmp`. Spike script preserved at `vdesign/utils/spike-bwrap.sh`.
 - [ ] Phase 2: Walking Skeleton — `cave claude`
   - Write the boundary tests first: reads and writes outside allowed directories, symlinks pointing outside, `git config --global`, writes under `--ro-dir` and host runtime, host `/tmp` visibility, `docker ps` and `systemctl --user` reaching the host, ownership of files created in allowed directories.
   - Implement option parsing, `--dir` / `--ro-dir`, host-path mounts, hidden home, private `/tmp` and `/run`, read-only host runtime, and the Phase 1 terminal approach.

@@ -27,3 +27,4 @@ venv/
 *.swo
 *~
 .DS_Store
+.#*
