@@ -1,0 +1,39 @@
+[defaults]
+ro_system = [
+    "/usr",
+    "/etc",
+    "/var",
+    "/sys",
+    "/bin",
+    "/sbin",
+    "/lib",
+    "/lib64",
+    "/lib32",
+    "/opt"
+]
+ro_home = [
+    ".local/bin",
+    ".cargo/bin",
+    ".rustup",
+    ".gitconfig"
+]
+rw_cache = [
+    ".cache",
+    ".cargo/registry",
+    ".cargo/git",
+    ".npm"
+]
+tmpfs = [
+    "/tmp",
+    "/run",
+    "/var/tmp"
+]
+
+[profiles.claude]
+state = [
+    ".claude",
+    ".claude.json"
+]
+runtime = [
+    ".local/share/claude"
+]

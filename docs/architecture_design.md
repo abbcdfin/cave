@@ -47,15 +47,12 @@
    - Boundary: defined in [product_specification.md › Scope](product_specification.md#scope).
    - Allowed directories: bind-mounted at their host paths with matching host UID/GID; read-write, or read-only for `--ro-dir`.
    - Mount order (decided 2026-09-18): engine defaults, then the agent profile, then the working directory, then `--dir` / `--ro-dir` in command-line order. A later mount covers an earlier one at the same path, so any explicitly allowed path overrides the default for that path with no special cases: `--dir /tmp` shows the host's `/tmp`, `--ro-dir .` makes the working directory read-only. cave warns on `--dir /` and `--dir ~`, which undo the boundary.
-   - Path classification (runtime and state rows verified by the Phase 1 spike):
-
-     | Class | Paths |
-     | :--- | :--- |
-     | Host runtime (RO) | `/usr`, `/etc`, `/bin`, `/sbin`, `/lib*`, `/opt`, `/var`, `/sys`; toolchains installed in home: `~/.local/bin`, `~/.cargo/bin`, `~/.rustup`, `~/.gitconfig` |
-     | Shared tool caches (RW) | `~/.cache`, and caches kept elsewhere: `~/.cargo/registry`, `~/.cargo/git`, `~/.npm` — disposable, and hiding them repeats every download (decided 2026-09-18) |
-     | Private tmpfs | `$HOME`, `/tmp`, `/run`, `/var/tmp` |
-     | Hidden | everything else, including `~/.config`, `~/.ssh`, `~/.gnupg`, `~/.docker`, `/run/docker.sock`, `/run/user/$UID/bus`. `~/.config` holds tokens and host tool settings a clumsy agent could clobber; agent profiles may allow specific subpaths read-only (decided 2026-09-18) |
-     | Agent profile | per agent. Claude Code: state `~/.claude/`, `~/.claude.json` (RW, so login and `claude -c` work); runtime `~/.local/share/claude` (RO) |
+   - Path classification: concrete paths are defined in the embedded configuration data [`src/profiles.toml`](../src/profiles.toml). The classes and rationale are:
+      - **Host runtime (RO)**: OS paths (`/usr`, `/etc`, `/bin`, `/sbin`, `/lib*`, `/opt`, `/var`, `/sys`) and installed toolchain binaries (`~/.local/bin`, `~/.cargo/bin`, `~/.rustup`, `~/.gitconfig`).
+      - **Shared tool caches (RW)**: disposable package and build caches (`~/.cache`, `~/.cargo/registry`, `~/.cargo/git`, `~/.npm`) to avoid repeated downloads.
+      - **Private tmpfs**: `$HOME`, `/tmp`, `/run`, `/var/tmp`.
+      - **Hidden**: sensitive host directories (`~/.config`, `~/.ssh`, `~/.gnupg`, `~/.docker`, `/run/docker.sock`, `/run/user/$UID/bus`).
+      - **Agent profile**: declared per-agent; Claude Code includes state (`~/.claude/`, `~/.claude.json`) as RW and runtime (`~/.local/share/claude`) as RO.
 
    - Machine-specific toolchain paths (e.g. a custom npm prefix such as `~/.npm_global`) are not defaults. Pass them with `--ro-dir`, or with a shell alias (`alias cave='cave --ro-dir ~/.npm_global'`) until the config-file candidate lands.
 
@@ -71,7 +68,7 @@ Decided 2026-09-18 at Phase 1 Decision Check Point:
 - **Isolation Engine**: Bubblewrap (`bwrap`) selected. Measured startup overhead of 9.28 ms (well within < 100ms threshold), zero root/daemon requirements, cleanly hides `/tmp` and `$HOME` with tmpfs.
 - **Terminal Model**: Direct Terminal Inheritance selected. `bwrap` inherits controlling terminal descriptors directly (`isatty: True`); resize (`SIGWINCH`), Ctrl-C (`SIGINT`), and colors pass natively without an intermediary PTY relay.
 - **Host /tmp Reuse**: Reusing host `/tmp` is supported strictly via the explicit `--dir /tmp` (or `--ro-dir /tmp`) option, which replaces the default private tmpfs. Generalized 2026-09-18 into the mount-order rule: every explicitly allowed path overrides the default for that path.
-- **Implementation Language**: Rust selected. Near-zero process startup (< 2ms overhead), single static binary distribution with no runtime dependencies, type-safe CLI and profile data models, and direct kernel process replacement via `std::os::unix::process::CommandExt::exec`.
+- **Implementation Language**: Rust selected. Near-zero process startup (< 2ms overhead), single static binary distribution with no runtime dependencies, type-safe CLI and profile data models, and direct kernel process replacement via `std::os::unix::process::CommandExt::exec`. Bash reconsidered 2026-09-18 and rejected: it matches Rust's startup, single-file distribution, and `exec`, and is easier to audit, but cave is primarily for the owner's own use, so auditability and distribution for other users weigh little; Rust kept by the owner's choice.
 - **Backend Coupling**: `cave` orchestrates `bwrap` as a loosely-coupled external backend rather than re-implementing or embedding namespace syscalls in Rust. Preserves security auditing, avoids complex kernel mount edge cases, and retains future backend flexibility.
 
 ## Delivery Approach
