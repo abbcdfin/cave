@@ -1,11 +1,19 @@
 # Checkpoint
 
 ## Current State
-- Tasks 2.R1, 2.R2, and 2.R3 complete in [`vdesign/active_plan.md`](active_plan.md):
-  - Test harness hardened with `set -eu`, explicit exit checks, host PID hiding, process termination, and negative failure verification.
-  - All 4 core bugs resolved and verified with unit/integration tests.
-  - Edge cases fixed: `args_os()`, missing `$HOME` error, canonicalized warning checks, zero clippy warnings, and `cave --doctor` implemented.
-  - Automated test suite passes (10 unit tests, 10 boundary tests).
+- Phase 2 (Walking Skeleton — `cave claude`) is complete:
+  - Rust implementation (`cli`, `policy`, `bwrap`, `profiles.toml`).
+  - Hardened boundary test suite (12 unit tests, 11 boundary tests passing).
+  - All 4 core remediation bugs fixed (mount ordering, `$HOME` CWD warning, atomic state writes with JSON seeding, first-run state auto-creation).
+  - Clippy clean (0 warnings).
+  - Benchmark overhead verified at 7.37 ms (budget < 100 ms).
+  - Direct execution verified against host `claude` (version and session invocation inside sandbox).
+  - Phase 2 remediation committed in commit `70eba8f`.
 
 ## Next Steps
-- Task 2.R4: Manual interactive terminal verification on the host terminal (`cave claude --dangerously-skip-permissions`, `cave claude -c`, resize, signals, setting persistence).
+- Transition to Phase 3: Agent Profiles & Diagnostics.
+  - Populate `vdesign/active_plan.md` with granular tasks for Phase 3:
+    1. Agent Profiles data (Aider, Antigravity `agy`, generic CLI).
+    2. Unknown agent warning verification & test coverage.
+    3. User config layering (`~/.config/cave/profiles.toml` append semantics).
+    4. Diagnostic display in `cave --doctor` (config sources and merged effective table).
