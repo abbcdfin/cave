@@ -30,10 +30,15 @@ tmpfs = [
 ]
 
 [profiles.claude]
-state = [
-    ".claude",
-    ".claude.json"
-]
 runtime = [
     ".local/share/claude"
 ]
+
+[[profiles.claude.state]]
+path = ".claude"
+kind = "dir"
+
+[[profiles.claude.state]]
+path = ".claude.json"
+kind = "file"
+init = "{}"

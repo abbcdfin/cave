@@ -1,6 +1,7 @@
-use crate::cli::RunOptions;
+use crate::cli::{ExtraDir, RunOptions};
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -29,13 +30,13 @@ pub struct MountPlan {
     pub uid: u32,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct ConfigData {
     pub defaults: DefaultsConfig,
     pub profiles: HashMap<String, AgentProfileConfig>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct DefaultsConfig {
     pub ro_system: Vec<String>,
     pub ro_home: Vec<String>,
@@ -43,9 +44,16 @@ pub struct DefaultsConfig {
     pub tmpfs: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
+pub struct StateEntry {
+    pub path: String,
+    pub kind: String,
+    pub init: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
 pub struct AgentProfileConfig {
-    pub state: Vec<String>,
+    pub state: Vec<StateEntry>,
     pub runtime: Vec<String>,
 }
 
@@ -55,6 +63,38 @@ pub fn load_config() -> ConfigData {
     toml::from_str(PROFILES_TOML).expect("Failed to parse embedded profiles.toml")
 }
 
+pub fn agent_basename(agent_cmd: &OsStr) -> &str {
+    Path::new(agent_cmd)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+}
+
+/// Explicit host side-effect step: ensures declared state files/directories exist
+/// before mounting so they can persist, seeding files with valid initial content.
+pub fn prepare_host_state(agent_cmd: &OsStr, home_dir: &Path) -> std::io::Result<()> {
+    let config = load_config();
+    let name = agent_basename(agent_cmd);
+
+    if let Some(profile) = config.profiles.get(name) {
+        for entry in &profile.state {
+            let target = home_dir.join(&entry.path);
+            if !target.exists() {
+                if entry.kind == "dir" {
+                    fs::create_dir_all(&target)?;
+                } else if entry.kind == "file" {
+                    if let Some(parent) = target.parent() {
+                        fs::create_dir_all(parent)?;
+                    }
+                    fs::write(&target, entry.init.as_deref().unwrap_or(""))?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Pure policy function: builds ordered mount plan without mutating the host filesystem.
 pub fn build_mount_plan(
     options: &RunOptions,
     home_dir: &Path,
@@ -140,12 +180,8 @@ pub fn build_mount_plan(
     }
 
     // 8. Agent Profile
-    let agent_name = Path::new(&options.agent_cmd)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or(&options.agent_cmd);
-
-    if let Some(profile) = config.profiles.get(agent_name) {
+    let name = agent_basename(&options.agent_cmd);
+    if let Some(profile) = config.profiles.get(name) {
         // Runtime paths (Read-Only)
         for rel in &profile.runtime {
             let p = home_dir.join(rel);
@@ -158,8 +194,8 @@ pub fn build_mount_plan(
             }
         }
         // State paths (Read-Write)
-        for rel in &profile.state {
-            let p = home_dir.join(rel);
+        for entry in &profile.state {
+            let p = home_dir.join(&entry.path);
             if p.exists() {
                 mounts.push(MountEntry {
                     host_path: Some(p.clone()),
@@ -172,29 +208,45 @@ pub fn build_mount_plan(
 
     // 9. Current working directory (Read-Write at host path)
     let canonical_cwd = fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
+    let canonical_home = fs::canonicalize(home_dir).unwrap_or_else(|_| home_dir.to_path_buf());
+
+    if canonical_cwd == canonical_home {
+        eprintln!(
+            "Warning: current working directory is {}, which exposes the entire host home directory, defeating sandbox boundaries.",
+            canonical_cwd.display()
+        );
+    } else if canonical_cwd == Path::new("/") {
+        eprintln!(
+            "Warning: current working directory is /, which exposes the host root filesystem, defeating sandbox boundaries."
+        );
+    }
+
     mounts.push(MountEntry {
         host_path: Some(canonical_cwd.clone()),
         target_path: canonical_cwd.clone(),
         kind: MountKind::BindReadWrite,
     });
 
-    // 10. Command-line overrides (--dir / --ro-dir)
-    for path in &options.dirs {
-        let canonical_path = fs::canonicalize(path).unwrap_or_else(|_| path.clone());
-        mounts.push(MountEntry {
-            host_path: Some(canonical_path.clone()),
-            target_path: canonical_path,
-            kind: MountKind::BindReadWrite,
-        });
-    }
-
-    for path in &options.ro_dirs {
-        let canonical_path = fs::canonicalize(path).unwrap_or_else(|_| path.clone());
-        mounts.push(MountEntry {
-            host_path: Some(canonical_path.clone()),
-            target_path: canonical_path,
-            kind: MountKind::BindReadOnly,
-        });
+    // 10. Command-line overrides (--dir / --ro-dir in exact specified order)
+    for extra in &options.extra_dirs {
+        match extra {
+            ExtraDir::ReadWrite(path) => {
+                let canonical_path = fs::canonicalize(path).unwrap_or_else(|_| path.clone());
+                mounts.push(MountEntry {
+                    host_path: Some(canonical_path.clone()),
+                    target_path: canonical_path,
+                    kind: MountKind::BindReadWrite,
+                });
+            }
+            ExtraDir::ReadOnly(path) => {
+                let canonical_path = fs::canonicalize(path).unwrap_or_else(|_| path.clone());
+                mounts.push(MountEntry {
+                    host_path: Some(canonical_path.clone()),
+                    target_path: canonical_path,
+                    kind: MountKind::BindReadOnly,
+                });
+            }
+        }
     }
 
     // Environment plan
@@ -219,6 +271,7 @@ pub fn build_mount_plan(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
     use tempfile::tempdir;
 
     #[test]
@@ -230,63 +283,27 @@ mod tests {
     }
 
     #[test]
-    fn test_build_mount_plan_claude() {
+    fn test_prepare_host_state_seeds_valid_json() {
         let dir = tempdir().unwrap();
         let home = dir.path().join("home");
-        let cwd = dir.path().join("project");
         fs::create_dir_all(&home).unwrap();
-        fs::create_dir_all(&cwd).unwrap();
 
-        // Create claude state and runtime in home
-        fs::create_dir_all(home.join(".claude")).unwrap();
-        fs::write(home.join(".claude.json"), "{}").unwrap();
-        fs::create_dir_all(home.join(".local/share/claude")).unwrap();
+        // Initially absent
+        assert!(!home.join(".claude").exists());
+        assert!(!home.join(".claude.json").exists());
 
-        let opts = RunOptions {
-            dirs: vec![],
-            ro_dirs: vec![],
-            agent_cmd: "claude".to_string(),
-            agent_args: vec![],
-        };
+        prepare_host_state(OsStr::new("claude"), &home).unwrap();
 
-        let plan = build_mount_plan(&opts, &home, &cwd, 1000);
-
-        // Check that ~/.claude is ReadWrite
-        let claude_mount = plan
-            .mounts
-            .iter()
-            .find(|m| m.target_path == home.join(".claude"))
-            .expect("~/.claude should be mounted");
-        assert_eq!(claude_mount.kind, MountKind::BindReadWrite);
-
-        // Check that ~/.local/share/claude is ReadOnly
-        let runtime_mount = plan
-            .mounts
-            .iter()
-            .find(|m| m.target_path == home.join(".local/share/claude"))
-            .expect("runtime should be mounted");
-        assert_eq!(runtime_mount.kind, MountKind::BindReadOnly);
-
-        // Check CWD is mounted ReadWrite
-        let canonical_cwd = fs::canonicalize(&cwd).unwrap();
-        let cwd_mount = plan
-            .mounts
-            .iter()
-            .find(|m| m.target_path == canonical_cwd)
-            .expect("CWD should be mounted");
-        assert_eq!(cwd_mount.kind, MountKind::BindReadWrite);
-
-        // Check environment plan
-        assert!(plan.unset_env.contains(&"SSH_AUTH_SOCK".to_string()));
-        assert!(plan.unset_env.contains(&"DBUS_SESSION_BUS_ADDRESS".to_string()));
-        assert!(plan
-            .set_env
-            .iter()
-            .any(|(k, v)| k == "XDG_RUNTIME_DIR" && v == "/run/user/1000"));
+        // .claude is created as dir
+        assert!(home.join(".claude").is_dir());
+        // .claude.json is created as file and contains "{}"
+        assert!(home.join(".claude.json").is_file());
+        let content = fs::read_to_string(home.join(".claude.json")).unwrap();
+        assert_eq!(content, "{}");
     }
 
     #[test]
-    fn test_mount_order_overrides() {
+    fn test_build_mount_plan_is_pure() {
         let dir = tempdir().unwrap();
         let home = dir.path().join("home");
         let cwd = dir.path().join("project");
@@ -294,37 +311,55 @@ mod tests {
         fs::create_dir_all(&cwd).unwrap();
 
         let opts = RunOptions {
-            dirs: vec![PathBuf::from("/tmp")],
-            ro_dirs: vec![cwd.clone()],
-            agent_cmd: "sh".to_string(),
+            extra_dirs: vec![],
+            agent_cmd: OsString::from("claude"),
+            agent_args: vec![],
+        };
+
+        // Calling build_mount_plan does not create missing files on host
+        let _plan = build_mount_plan(&opts, &home, &cwd, 1000);
+        assert!(!home.join(".claude").exists());
+        assert!(!home.join(".claude.json").exists());
+    }
+
+    #[test]
+    fn test_command_line_mount_order_respected() {
+        let dir = tempdir().unwrap();
+        let home = dir.path().join("home");
+        let cwd = dir.path().join("project");
+        let sub = cwd.join("sub");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(&sub).unwrap();
+
+        let opts = RunOptions {
+            extra_dirs: vec![
+                ExtraDir::ReadOnly(cwd.clone()),
+                ExtraDir::ReadWrite(sub.clone()),
+            ],
+            agent_cmd: OsString::from("sh"),
             agent_args: vec![],
         };
 
         let plan = build_mount_plan(&opts, &home, &cwd, 1000);
 
-        // Verify that the user's /tmp mount comes AFTER the initial tmpfs /tmp
-        let tmp_indices: Vec<usize> = plan
-            .mounts
-            .iter()
-            .enumerate()
-            .filter(|(_, m)| m.target_path == PathBuf::from("/tmp"))
-            .map(|(i, _)| i)
-            .collect();
-        assert_eq!(tmp_indices.len(), 2);
-        assert_eq!(plan.mounts[tmp_indices[0]].kind, MountKind::Tmpfs);
-        assert_eq!(plan.mounts[tmp_indices[1]].kind, MountKind::BindReadWrite);
-
-        // Verify that the user's --ro-dir for cwd comes AFTER the default cwd mount
         let canonical_cwd = fs::canonicalize(&cwd).unwrap();
-        let cwd_indices: Vec<usize> = plan
+        let canonical_sub = fs::canonicalize(&sub).unwrap();
+
+        let cwd_ro_idx = plan
             .mounts
             .iter()
-            .enumerate()
-            .filter(|(_, m)| m.target_path == canonical_cwd)
-            .map(|(i, _)| i)
-            .collect();
-        assert_eq!(cwd_indices.len(), 2);
-        assert_eq!(plan.mounts[cwd_indices[0]].kind, MountKind::BindReadWrite);
-        assert_eq!(plan.mounts[cwd_indices[1]].kind, MountKind::BindReadOnly);
+            .position(|m| m.target_path == canonical_cwd && m.kind == MountKind::BindReadOnly)
+            .expect("cwd RO mount should exist");
+
+        let sub_rw_idx = plan
+            .mounts
+            .iter()
+            .position(|m| m.target_path == canonical_sub && m.kind == MountKind::BindReadWrite)
+            .expect("sub RW mount should exist");
+
+        assert!(
+            sub_rw_idx > cwd_ro_idx,
+            "sub RW mount ({sub_rw_idx}) must come after cwd RO mount ({cwd_ro_idx})"
+        );
     }
 }

@@ -46,14 +46,13 @@ fn which_bwrap() -> Result<PathBuf, ()> {
     Err(())
 }
 
-pub fn render_args(plan: &MountPlan, agent_cmd: &str, agent_args: &[String]) -> Vec<OsString> {
-    let mut args = Vec::new();
-
-    // Lifeline & standard namespaces
-    args.push(OsString::from("--die-with-parent"));
-    args.push(OsString::from("--unshare-pid"));
-    args.push(OsString::from("--unshare-uts"));
-    args.push(OsString::from("--unshare-ipc"));
+pub fn render_args(plan: &MountPlan, agent_cmd: &std::ffi::OsStr, agent_args: &[OsString]) -> Vec<OsString> {
+    let mut args = vec![
+        OsString::from("--die-with-parent"),
+        OsString::from("--unshare-pid"),
+        OsString::from("--unshare-uts"),
+        OsString::from("--unshare-ipc"),
+    ];
 
     // Render mounts in order
     for mount in &plan.mounts {
@@ -114,9 +113,9 @@ pub fn render_args(plan: &MountPlan, agent_cmd: &str, agent_args: &[String]) -> 
 
     // Command separator and agent invocation
     args.push(OsString::from("--"));
-    args.push(OsString::from(agent_cmd));
+    args.push(agent_cmd.to_os_string());
     for a in agent_args {
-        args.push(OsString::from(a));
+        args.push(a.clone());
     }
 
     args
