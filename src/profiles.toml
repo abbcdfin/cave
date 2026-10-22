@@ -42,3 +42,47 @@ kind = "dir"
 path = ".claude.json"
 kind = "file"
 init = "{}"
+
+[profiles.agy]
+runtime = [
+    ".gemini/antigravity-cli/bin"
+]
+
+[[profiles.agy.state]]
+path = ".gemini"
+kind = "dir"
+
+[profiles.aider]
+runtime = []
+
+[[profiles.aider.state]]
+path = ".aider"
+kind = "dir"
+
+[[profiles.aider.state]]
+path = ".aider.conf.yml"
+kind = "file"
+init = ""
+
+[[profiles.aider.state]]
+path = ".aider.chat.history.md"
+kind = "file"
+init = ""
+
+[[profiles.aider.state]]
+path = ".aider.input.history"
+kind = "file"
+init = ""
+
+[profiles.sh]
+runtime = []
+state = []
+
+[profiles.bash]
+runtime = []
+state = []
+
+[profiles.zsh]
+runtime = []
+state = []
+

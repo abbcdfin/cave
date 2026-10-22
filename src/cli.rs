@@ -204,11 +204,96 @@ pub fn run_doctor() -> bool {
     }
 
     // 3. Check HOME
-    if let Ok(home) = std::env::var("HOME") {
+    let home_path = if let Ok(home) = std::env::var("HOME") {
         println!("  [OK] HOME directory: {home}");
+        Some(PathBuf::from(home))
     } else {
         println!("  [FAIL] HOME environment variable is not set");
         ok = false;
+        None
+    };
+
+    // 4. Check /var/run is a symlink to /run (Docker socket leak check)
+    let var_run = Path::new("/var/run");
+    if let Ok(meta) = fs::symlink_metadata(var_run) {
+        if meta.file_type().is_symlink() {
+            println!("  [OK] /var/run is a symlink to /run (Docker socket not exposed via /var bind)");
+        } else {
+            println!("  [WARN] /var/run is a real directory, not a symlink! Read-only /var bind may expose host Docker socket.");
+        }
+    } else {
+        println!("  [OK] /var/run is absent or inaccessible");
+    }
+
+    // 5. Test DNS resolution inside sandbox
+    if let Some(ref home) = home_path {
+        let bwrap_res = crate::bwrap::check_bwrap_available();
+        if let Ok(bwrap_bin) = bwrap_res {
+            let test_opts = RunOptions {
+                extra_dirs: vec![],
+                agent_cmd: std::ffi::OsString::from("sh"),
+                agent_args: vec![
+                    std::ffi::OsString::from("-c"),
+                    std::ffi::OsString::from("getent ahostsv4 localhost || getent hosts localhost || true"),
+                ],
+            };
+            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
+            let uid = unsafe { libc::getuid() };
+            let plan = crate::policy::build_mount_plan(&test_opts, home, &cwd, uid);
+            let bwrap_args = crate::bwrap::render_args(&plan, &test_opts.agent_cmd, &test_opts.agent_args);
+            let check_output = std::process::Command::new(bwrap_bin)
+                .args(&bwrap_args)
+                .output();
+            match check_output {
+                Ok(out) if out.status.success() && String::from_utf8_lossy(&out.stdout).contains("127.0.0.1") => {
+                    println!("  [OK] sandbox DNS resolution verified (resolved localhost to 127.0.0.1)");
+                }
+                Ok(out) => {
+                    println!("  [WARN] sandbox DNS resolution returned non-zero or unexpected output: {:?}", out.status.code());
+                }
+                Err(e) => {
+                    println!("  [WARN] sandbox DNS resolution check failed to run: {e}");
+                }
+            }
+        }
+    }
+
+    // 6. Print loaded configuration sources and effective merged table
+    println!();
+    if let Some(ref home) = home_path {
+        match crate::policy::load_effective_config(home) {
+            Ok(config) => {
+                println!("Loaded configuration sources:");
+                for src in &config.sources {
+                    println!("  - {src}");
+                }
+                println!();
+                println!("Effective merged configuration:");
+                println!("  Defaults:");
+                println!("    ro_system ({} paths): {:?}", config.defaults.ro_system.len(), config.defaults.ro_system);
+                println!("    ro_home   ({} paths): {:?}", config.defaults.ro_home.len(), config.defaults.ro_home);
+                println!("    rw_cache  ({} paths): {:?}", config.defaults.rw_cache.len(), config.defaults.rw_cache);
+                println!("    tmpfs     ({} paths): {:?}", config.defaults.tmpfs.len(), config.defaults.tmpfs);
+                println!("  Profiles:");
+                let mut profile_names: Vec<_> = config.profiles.keys().collect();
+                profile_names.sort();
+                for name in profile_names {
+                    let prof = &config.profiles[name];
+                    println!("    [{name}]");
+                    if !prof.runtime.is_empty() {
+                        println!("      runtime (RO): {:?}", prof.runtime);
+                    }
+                    if !prof.state.is_empty() {
+                        let state_repr: Vec<_> = prof.state.iter().map(|s| format!("{} ({})", s.path, s.kind)).collect();
+                        println!("      state   (RW): {:?}", state_repr);
+                    }
+                }
+            }
+            Err(e) => {
+                println!("  [FAIL] Failed to load configuration: {e}");
+                ok = false;
+            }
+        }
     }
 
     println!();

@@ -13,6 +13,8 @@ struct HermeticFixture {
     sibling_project: PathBuf,
     host_tmp_marker: PathBuf,
     fake_claude_bin: PathBuf,
+    fake_agy_bin: PathBuf,
+    fake_aider_bin: PathBuf,
 }
 
 impl HermeticFixture {
@@ -57,6 +59,37 @@ impl HermeticFixture {
         let fake_claude_bin = working_dir.join("claude");
         symlink("/bin/sh", &fake_claude_bin).unwrap();
 
+        // Fake agy agent binary (symlink to sh so it can execute scripts while triggering agy profile)
+        let fake_agy_bin = working_dir.join("agy");
+        symlink("/bin/sh", &fake_agy_bin).unwrap();
+
+        // Fake aider agent binary (symlink to sh so it can execute scripts while triggering aider profile)
+        let fake_aider_bin = working_dir.join("aider");
+        symlink("/bin/sh", &fake_aider_bin).unwrap();
+
+        // Host gemini state and IDE directories
+        let gemini_dir = fake_home.join(".gemini");
+        fs::create_dir_all(&gemini_dir).unwrap();
+        fs::write(gemini_dir.join("GEMINI.md"), "# Gemini settings").unwrap();
+
+        let agy_bin_dir = gemini_dir.join("antigravity-cli").join("bin");
+        fs::create_dir_all(&agy_bin_dir).unwrap();
+        fs::write(agy_bin_dir.join("tool.sh"), "#!/bin/sh\necho tool").unwrap();
+
+        let antigravity_dir = fake_home.join(".antigravity");
+        fs::create_dir_all(&antigravity_dir).unwrap();
+        fs::write(antigravity_dir.join("extensions.json"), "extensions").unwrap();
+
+        let config_antigravity_dir = fake_home.join(".config").join("Antigravity");
+        fs::create_dir_all(&config_antigravity_dir).unwrap();
+        fs::write(config_antigravity_dir.join("cookies"), "cookies").unwrap();
+
+        // Host aider state
+        let aider_dir = fake_home.join(".aider");
+        fs::create_dir_all(&aider_dir).unwrap();
+        fs::write(aider_dir.join("analytics.json"), "{}").unwrap();
+        fs::write(fake_home.join(".aider.conf.yml"), "model: sonnet\n").unwrap();
+
         // Sibling project
         fs::write(sibling_project.join("secret_sibling.txt"), "sibling data").unwrap();
 
@@ -76,6 +109,8 @@ impl HermeticFixture {
             sibling_project,
             host_tmp_marker,
             fake_claude_bin,
+            fake_agy_bin,
+            fake_aider_bin,
         }
     }
 
@@ -94,6 +129,7 @@ impl HermeticFixture {
             .arg(&wrapped_script)
             .current_dir(&self.working_dir)
             .env("HOME", &self.fake_home)
+            .env_remove("XDG_CONFIG_HOME")
             .env("TEST_HOST_VAR", "preserved_value")
             .env("SSH_AUTH_SOCK", "/tmp/fake_ssh_auth_sock")
             .env("DBUS_SESSION_BUS_ADDRESS", "unix:path=/tmp/fake_dbus");
@@ -355,19 +391,53 @@ fn test_killing_cave_kills_agent_process() {
     child.kill().expect("Failed to kill cave child process");
     let _ = child.wait();
 
-    // Give kernel a moment to reap namespace processes
-    std::thread::sleep(Duration::from_millis(150));
+    // Poll on host to verify the child process is reaped
+    let mut terminated = false;
+    let mut last_leak_info = String::new();
+    for _ in 0..40 {
+        let pgrep_after = Command::new("pgrep")
+            .arg(&unique_tag)
+            .output()
+            .expect("Failed to run pgrep");
+        if !pgrep_after.status.success() || pgrep_after.stdout.is_empty() {
+            terminated = true;
+            break;
+        }
 
-    // Assert the host sees NO running process with this unique tag
-    let pgrep_after = Command::new("pgrep")
-        .arg("-f")
-        .arg(&unique_tag)
-        .output()
-        .expect("Failed to run pgrep");
+        // Verify if any matched PID is still actively running (not a Zombie 'Z' / Dead 'X')
+        let pids_str = String::from_utf8_lossy(&pgrep_after.stdout);
+        let mut any_alive = false;
+        let mut alive_pids = Vec::new();
+        for pid_str in pids_str.lines() {
+            let pid_str = pid_str.trim();
+            if pid_str.is_empty() {
+                continue;
+            }
+            if let Ok(stat) = fs::read_to_string(format!("/proc/{}/stat", pid_str)) {
+                // The 3rd field in /proc/[pid]/stat is the process state (e.g. R, S, D, Z, X)
+                if let Some(state) = stat.split_whitespace().nth(2) {
+                    if state != "Z" && state != "X" {
+                        any_alive = true;
+                        alive_pids.push(format!("{pid_str} (state {state})"));
+                    }
+                } else {
+                    any_alive = true;
+                    alive_pids.push(pid_str.to_string());
+                }
+            }
+        }
+        if !any_alive {
+            terminated = true;
+            break;
+        }
+        last_leak_info = alive_pids.join(", ");
+        std::thread::sleep(Duration::from_millis(50));
+    }
     assert!(
-        !pgrep_after.status.success(),
-        "Agent process with tag '{}' leaked on host after cave was killed!",
-        unique_tag
+        terminated,
+        "Agent process with tag '{}' leaked on host after cave was killed! Matches:\n{}",
+        unique_tag,
+        last_leak_info
     );
 }
 
@@ -396,3 +466,184 @@ fn test_non_utf8_arguments_pass_unmangled() {
         assert_eq!(output.stdout, raw_bytes);
     }
 }
+
+#[test]
+fn test_agy_profile_boundary() {
+    let fixture = HermeticFixture::new();
+
+    let script = r#"
+        # 1. ~/.gemini is read-write
+        echo "cave agy write test" > "$HOME/.gemini/test_write.txt"
+        test -f "$HOME/.gemini/test_write.txt"
+
+        # 2. ~/.gemini/antigravity-cli/bin is read-only (subpath protection inside RW state dir)
+        test -f "$HOME/.gemini/antigravity-cli/bin/tool.sh"
+        if echo "overwrite" >> "$HOME/.gemini/antigravity-cli/bin/tool.sh" 2>/dev/null; then
+            echo "FAIL: ~/.gemini/antigravity-cli/bin should be read-only!"
+            exit 1
+        fi
+
+        # 3. ~/.antigravity and ~/.config/Antigravity are hidden
+        if test -e "$HOME/.antigravity"; then
+            echo "FAIL: ~/.antigravity is visible!"
+            exit 1
+        fi
+        if test -e "$HOME/.config/Antigravity"; then
+            echo "FAIL: ~/.config/Antigravity is visible!"
+            exit 1
+        fi
+
+        # 4. ~/.ssh is hidden
+        if test -e "$HOME/.ssh"; then
+            echo "FAIL: ~/.ssh is visible!"
+            exit 1
+        fi
+    "#;
+
+    let output = fixture.run_cave_agent(fixture.fake_agy_bin.to_str().unwrap(), &[], script);
+    fixture.assert_success_with_sentinel(&output);
+
+    // Verify on host that the write to ~/.gemini persisted
+    let host_write = fixture.fake_home.join(".gemini").join("test_write.txt");
+    assert!(host_write.exists(), "Host ~/.gemini state was not written!");
+    let content = fs::read_to_string(host_write).unwrap();
+    assert_eq!(content.trim(), "cave agy write test");
+}
+
+#[test]
+fn test_aider_profile_boundary() {
+    let fixture = HermeticFixture::new();
+
+    let script = r#"
+        # 1. ~/.aider and ~/.aider.conf.yml are read-write
+        test -f "$HOME/.aider.conf.yml"
+        echo "verbose: true" >> "$HOME/.aider.conf.yml"
+        echo "session" > "$HOME/.aider/session.txt"
+        test -f "$HOME/.aider/session.txt"
+
+        # 2. Sensitive directories stay hidden
+        if test -e "$HOME/.ssh"; then
+            echo "FAIL: ~/.ssh is visible!"
+            exit 1
+        fi
+    "#;
+
+    let output = fixture.run_cave_agent(fixture.fake_aider_bin.to_str().unwrap(), &[], script);
+    fixture.assert_success_with_sentinel(&output);
+
+    // Verify on host that writes persisted
+    let host_conf = fixture.fake_home.join(".aider.conf.yml");
+    let conf_content = fs::read_to_string(host_conf).unwrap();
+    assert!(conf_content.contains("verbose: true"));
+
+    let host_session = fixture.fake_home.join(".aider").join("session.txt");
+    assert!(host_session.exists());
+}
+
+#[test]
+fn test_shell_profile_silences_unknown_warning() {
+    let fixture = HermeticFixture::new();
+
+    let output = fixture.run_cave_agent("sh", &[], "true");
+    assert!(output.status.success());
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("Warning: no profile for agent 'sh'"),
+        "stderr should NOT contain warning for configured shell 'sh', got: {stderr}"
+    );
+}
+
+#[test]
+fn test_unknown_agent_warning_emitted_to_stderr() {
+    let fixture = HermeticFixture::new();
+
+    let fake_unknown_bin = fixture.working_dir.join("unknown_agent_xyz");
+    symlink("/bin/sh", &fake_unknown_bin).unwrap();
+
+    let output = fixture.run_cave_agent(fake_unknown_bin.to_str().unwrap(), &[], "true");
+    assert!(output.status.success(), "Process failed with unknown agent: {:?}", output);
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Warning: no profile for agent 'unknown_agent_xyz'; $HOME is ephemeral and state will not persist. Use --dir to mount host paths."),
+        "Expected unknown agent warning on stderr, got: {stderr}"
+    );
+}
+
+#[test]
+fn test_user_config_file_layering_boundary() {
+    let fixture = HermeticFixture::new();
+
+    // 1. Create a user config file inside fake_home: ~/.config/cave/profiles.toml
+    let cave_cfg_dir = fixture.fake_home.join(".config").join("cave");
+    fs::create_dir_all(&cave_cfg_dir).unwrap();
+    let user_toml = r#"
+        [defaults]
+        ro_home = [".custom_allowed_tool"]
+    "#;
+    fs::write(cave_cfg_dir.join("profiles.toml"), user_toml).unwrap();
+
+    // 2. Create the target path on host inside fake_home
+    let custom_tool_dir = fixture.fake_home.join(".custom_allowed_tool");
+    fs::create_dir_all(&custom_tool_dir).unwrap();
+    fs::write(custom_tool_dir.join("tool.txt"), "user config allowed tool").unwrap();
+
+    let script = r#"
+        # 1. Path added only by user config file is mounted read-only
+        test -f "$HOME/.custom_allowed_tool/tool.txt"
+        if echo "write test" >> "$HOME/.custom_allowed_tool/tool.txt" 2>/dev/null; then
+            echo "FAIL: .custom_allowed_tool should be read-only!"
+            exit 1
+        fi
+
+        # 2. ~/.config/cave/ is not visible inside the sandbox
+        if test -e "$HOME/.config/cave"; then
+            echo "FAIL: ~/.config/cave is visible inside sandbox!"
+            exit 1
+        fi
+    "#;
+
+    let output = fixture.run_cave(&[], script);
+    fixture.assert_success_with_sentinel(&output);
+}
+
+#[test]
+fn test_user_config_malformed_fails_fatal() {
+    let fixture = HermeticFixture::new();
+
+    let cave_cfg_dir = fixture.fake_home.join(".config").join("cave");
+    fs::create_dir_all(&cave_cfg_dir).unwrap();
+    fs::write(cave_cfg_dir.join("profiles.toml"), "bad = [ toml").unwrap();
+
+    let output = fixture.run_cave(&[], "true");
+    assert!(!output.status.success(), "cave should fail with malformed user config");
+    assert_eq!(output.status.code(), Some(1));
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Error parsing user config file"), "stderr was: {stderr}");
+    assert!(stderr.contains("line"), "stderr was: {stderr}");
+}
+
+#[test]
+fn test_doctor_command_outputs_diagnostics() {
+    let cave_bin = env!("CARGO_BIN_EXE_cave");
+    let output = Command::new(cave_bin)
+        .arg("--doctor")
+        .output()
+        .expect("Failed to execute cave --doctor");
+
+    assert!(output.status.success(), "cave --doctor failed: {:?}", output);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("bubblewrap found"));
+    assert!(stdout.contains("/var/run is a symlink"));
+    assert!(stdout.contains("sandbox DNS resolution verified"));
+    assert!(stdout.contains("Loaded configuration sources:"));
+    assert!(stdout.contains("Effective merged configuration:"));
+    assert!(stdout.contains("[claude]"));
+    assert!(stdout.contains("[agy]"));
+    assert!(stdout.contains("[aider]"));
+}
+
+
+

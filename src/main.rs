@@ -1,6 +1,8 @@
 use cave::bwrap::{check_bwrap_available, exec_bwrap, render_args};
 use cave::cli::{parse_args, print_help, print_version, run_doctor, CliCommand};
-use cave::policy::{agent_basename, build_mount_plan, load_config, prepare_host_state};
+use cave::policy::{
+    agent_basename, build_mount_plan, load_effective_config, prepare_host_state,
+};
 use std::env;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -59,9 +61,16 @@ fn main() -> ExitCode {
             };
             let uid = unsafe { libc::getuid() };
 
+            let config = match load_effective_config(&home) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("{e}");
+                    return ExitCode::from(1);
+                }
+            };
+
             // Warn if no profile matches agent basename (unknown agent fail-loudly policy)
             let agent_name = agent_basename(&opts.agent_cmd);
-            let config = load_config();
             if !config.profiles.contains_key(agent_name) {
                 eprintln!(
                     "Warning: no profile for agent '{agent_name}'; $HOME is ephemeral and state will not persist. Use --dir to mount host paths."

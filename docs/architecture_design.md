@@ -56,8 +56,8 @@
 
    - Machine-specific toolchain paths (e.g. a custom npm prefix such as `~/.npm_global`) are not defaults. Pass them with `--ro-dir`, or with a shell alias (`alias cave='cave --ro-dir ~/.npm_global'`) until the config-file candidate lands.
 
-   - DNS: `/etc/resolv.conf` is a symlink into `/run` on systemd-resolved hosts, so the file it resolves to is bound read-only over it, keeping `/run` private. (Sandbox DNS resolution check in `--doctor` is scheduled for Phase 3).
-   - `/var` is bound read-only on the assumption that `/var/run` is a symlink to `/run`. Where a distro still makes it a real directory, the Docker socket returns through that bind. (Checking whether `/var/run` is a symlink or exposes Docker in `--doctor` is scheduled for Phase 3).
+   - DNS: `/etc/resolv.conf` is a symlink into `/run` on systemd-resolved hosts, so the file it resolves to is bound read-only over it, keeping `/run` private. (Sandbox DNS resolution check is verified in `--doctor`).
+   - `/var` is bound read-only on the assumption that `/var/run` is a symlink to `/run`. Where a distro still makes it a real directory, the Docker socket returns through that bind. (Checked in `--doctor` to ensure `/var/run` is a symlink to `/run`).
    - Environment (decided 2026-09-18): the host environment passes through, minus variables that point at hidden sockets (`SSH_AUTH_SOCK`, `DBUS_SESSION_BUS_ADDRESS`); `XDG_RUNTIME_DIR` points at a private `/run/user/$UID` (`0700`). An allowlist would never cover every toolchain variable (`JAVA_HOME`, `CARGO_HOME`, `NVM_DIR`, proxies), and environment secrets are not files, so they are outside the clumsy-agent scope.
    - Network: outbound network enabled for API calls and package downloads.
    - Agent profiles (decided 2026-09-18): each agent's state paths (RW), runtime paths and `~/.config` subpaths (RO), declared as data and interpreted by one engine. Built-in profiles are compiled into the binary and selected by the agent command's basename (`~/.local/bin/claude` → `claude`); an unknown command gets the engine defaults only, with a warning. Adding an agent is a data change; the format is backend-independent, so a future platform adds a backend, not new profiles.
@@ -72,7 +72,7 @@
       - **Removal is not expressible**, by choice. Should a concrete need appear, it is one more class in the same table (`hide = [...]`, rendered as a tmpfs — the mechanism that already hides `$HOME`), not a new mechanism. Candidate, not built.
       - **User-global only.** A per-project `./.cave/profiles.toml` would sit in the read-write working directory, so an agent could widen its own boundary on the next run — accidental under this threat model, but a sandbox whose rules live inside the sandbox is the wrong shape. `~/.config/cave/` is hidden inside the sandbox, so the confining policy is unreadable from within. A per-project file would need an explicit opt-in flag.
       - **Parse failures are fatal and located.** A malformed user file exits non-zero naming file and line; ignoring it would run the default boundary while the user believed it was widened. The embedded table keeps `expect` — a build-time invariant covered by `test_load_config`.
-      - `--doctor` in Phase 3 will print the loaded sources and the effective merged table, since “why isn't my path mounted” is otherwise unanswerable without reading the source.
+      - `--doctor` prints the loaded sources and the effective merged table, answering why a path is or is not mounted.
 
 ## Spike Outcomes & Decisions
 

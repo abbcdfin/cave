@@ -34,6 +34,36 @@ pub struct MountPlan {
 pub struct ConfigData {
     pub defaults: DefaultsConfig,
     pub profiles: HashMap<String, AgentProfileConfig>,
+    #[serde(default)]
+    pub sources: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct UserConfigData {
+    #[serde(default)]
+    pub defaults: Option<UserDefaultsConfig>,
+    #[serde(default)]
+    pub profiles: HashMap<String, UserAgentProfileConfig>,
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct UserDefaultsConfig {
+    #[serde(default)]
+    pub ro_system: Vec<String>,
+    #[serde(default)]
+    pub ro_home: Vec<String>,
+    #[serde(default)]
+    pub rw_cache: Vec<String>,
+    #[serde(default)]
+    pub tmpfs: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct UserAgentProfileConfig {
+    #[serde(default)]
+    pub state: Vec<StateEntry>,
+    #[serde(default)]
+    pub runtime: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -69,7 +99,88 @@ pub struct AgentProfileConfig {
 pub static PROFILES_TOML: &str = include_str!("profiles.toml");
 
 pub fn load_config() -> ConfigData {
-    toml::from_str(PROFILES_TOML).expect("Failed to parse embedded profiles.toml")
+    let mut config: ConfigData = toml::from_str(PROFILES_TOML).expect("Failed to parse embedded profiles.toml");
+    config.sources = vec!["embedded profiles.toml".to_string()];
+    config
+}
+
+pub fn user_config_path(home_dir: &Path) -> PathBuf {
+    if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
+        let is_matching_home = std::env::var_os("HOME").map(PathBuf::from).as_deref() == Some(home_dir);
+        if !xdg.is_empty() && (is_matching_home || Path::new(&xdg).starts_with(home_dir)) {
+            return PathBuf::from(xdg).join("cave").join("profiles.toml");
+        }
+    }
+    home_dir.join(".config").join("cave").join("profiles.toml")
+}
+
+pub fn load_effective_config(home_dir: &Path) -> Result<ConfigData, String> {
+    let mut config = load_config();
+    let config_path = user_config_path(home_dir);
+
+    if !config_path.exists() {
+        return Ok(config);
+    }
+
+    let content = fs::read_to_string(&config_path)
+        .map_err(|e| format!("Error reading user config file '{}': {}", config_path.display(), e))?;
+
+    let user_config: UserConfigData = toml::from_str(&content)
+        .map_err(|e| format!("Error parsing user config file '{}': {}", config_path.display(), e))?;
+
+    merge_user_config(&mut config, user_config);
+    config.sources.push(config_path.display().to_string());
+
+    Ok(config)
+}
+
+pub fn merge_user_config(config: &mut ConfigData, user_config: UserConfigData) {
+    if let Some(user_defaults) = user_config.defaults {
+        for s in user_defaults.ro_system {
+            if !config.defaults.ro_system.contains(&s) {
+                config.defaults.ro_system.push(s);
+            }
+        }
+        for s in user_defaults.tmpfs {
+            if !config.defaults.tmpfs.contains(&s) {
+                config.defaults.tmpfs.push(s);
+            }
+        }
+        for rel in user_defaults.ro_home {
+            // Downgrade: if present in rw_cache, remove from rw_cache
+            config.defaults.rw_cache.retain(|x| x != &rel);
+            if !config.defaults.ro_home.contains(&rel) {
+                config.defaults.ro_home.push(rel);
+            }
+        }
+        for rel in user_defaults.rw_cache {
+            // If present in ro_home, remove from ro_home
+            config.defaults.ro_home.retain(|x| x != &rel);
+            if !config.defaults.rw_cache.contains(&rel) {
+                config.defaults.rw_cache.push(rel);
+            }
+        }
+    }
+
+    for (name, user_prof) in user_config.profiles {
+        let entry = config.profiles.entry(name).or_insert_with(|| AgentProfileConfig {
+            state: Vec::new(),
+            runtime: Vec::new(),
+        });
+        for s in user_prof.state {
+            entry.runtime.retain(|x| x != &s.path);
+            if !entry.state.iter().any(|x| x.path == s.path) {
+                entry.state.push(s);
+            }
+        }
+        for r in user_prof.runtime {
+            // Downgrade: if present in state, remove from state
+            entry.state.retain(|x| x.path != r);
+            if !entry.runtime.contains(&r) {
+                entry.runtime.push(r);
+            }
+        }
+    }
 }
 
 pub fn agent_basename(agent_cmd: &OsStr) -> &str {
@@ -82,7 +193,8 @@ pub fn agent_basename(agent_cmd: &OsStr) -> &str {
 /// Explicit host side-effect step: ensures declared state files/directories exist
 /// before mounting so they can persist, seeding files with valid initial content.
 pub fn prepare_host_state(agent_cmd: &OsStr, home_dir: &Path) -> std::io::Result<()> {
-    let config = load_config();
+    let config = load_effective_config(home_dir)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     let name = agent_basename(agent_cmd);
 
     if let Some(profile) = config.profiles.get(name) {
@@ -110,7 +222,7 @@ pub fn build_mount_plan(
     cwd: &Path,
     uid: u32,
 ) -> MountPlan {
-    let config = load_config();
+    let config = load_effective_config(home_dir).unwrap_or_else(|_| load_config());
     let mut mounts = Vec::new();
 
     // 1. Kernel filesystems
@@ -191,17 +303,6 @@ pub fn build_mount_plan(
     // 8. Agent Profile
     let name = agent_basename(&options.agent_cmd);
     if let Some(profile) = config.profiles.get(name) {
-        // Runtime paths (Read-Only)
-        for rel in &profile.runtime {
-            let p = home_dir.join(rel);
-            if p.exists() {
-                mounts.push(MountEntry {
-                    host_path: Some(p.clone()),
-                    target_path: p,
-                    kind: MountKind::BindReadOnly,
-                });
-            }
-        }
         // State paths (Read-Write)
         for entry in &profile.state {
             let p = home_dir.join(&entry.path);
@@ -210,6 +311,17 @@ pub fn build_mount_plan(
                     host_path: Some(p.clone()),
                     target_path: p,
                     kind: MountKind::BindReadWrite,
+                });
+            }
+        }
+        // Runtime paths (Read-Only) - rendered after state so an RO subpath inside an RW state dir overrides it
+        for rel in &profile.runtime {
+            let p = home_dir.join(rel);
+            if p.exists() {
+                mounts.push(MountEntry {
+                    host_path: Some(p.clone()),
+                    target_path: p,
+                    kind: MountKind::BindReadOnly,
                 });
             }
         }
@@ -289,6 +401,10 @@ mod tests {
         assert!(config.defaults.ro_system.contains(&"/usr".to_string()));
         assert!(config.defaults.tmpfs.contains(&"/tmp".to_string()));
         assert!(config.profiles.contains_key("claude"));
+        assert!(config.profiles.contains_key("agy"));
+        assert!(config.profiles.contains_key("aider"));
+        assert!(config.profiles.contains_key("sh"));
+        assert!(config.profiles.contains_key("bash"));
     }
 
     #[test]
@@ -370,5 +486,80 @@ mod tests {
             sub_rw_idx > cwd_ro_idx,
             "sub RW mount ({sub_rw_idx}) must come after cwd RO mount ({cwd_ro_idx})"
         );
+    }
+
+    #[test]
+    fn test_merge_user_config_append() {
+        let mut config = load_config();
+        let user_toml = r#"
+            [defaults]
+            ro_system = ["/opt/custom"]
+            ro_home = [".custom_tool"]
+            rw_cache = [".custom_cache"]
+            tmpfs = ["/custom_tmp"]
+
+            [profiles.claude]
+            runtime = [".local/share/claude-extra"]
+
+            [profiles.mybot]
+            runtime = [".mybot/bin"]
+            [[profiles.mybot.state]]
+            path = ".mybot/data"
+            kind = "dir"
+        "#;
+        let user_cfg: UserConfigData = toml::from_str(user_toml).unwrap();
+        merge_user_config(&mut config, user_cfg);
+
+        assert!(config.defaults.ro_system.contains(&"/opt/custom".to_string()));
+        assert!(config.defaults.ro_home.contains(&".custom_tool".to_string()));
+        assert!(config.defaults.rw_cache.contains(&".custom_cache".to_string()));
+        assert!(config.defaults.tmpfs.contains(&"/custom_tmp".to_string()));
+
+        let claude = config.profiles.get("claude").unwrap();
+        assert!(claude.runtime.contains(&".local/share/claude-extra".to_string()));
+
+        let mybot = config.profiles.get("mybot").unwrap();
+        assert!(mybot.runtime.contains(&".mybot/bin".to_string()));
+        assert!(mybot.state.iter().any(|s| s.path == ".mybot/data"));
+    }
+
+    #[test]
+    fn test_merge_user_config_downgrade_by_redeclaration() {
+        let mut config = load_config();
+        assert!(config.defaults.rw_cache.contains(&".cache".to_string()));
+
+        let user_toml = r#"
+            [defaults]
+            ro_home = [".cache"]
+        "#;
+        let user_cfg: UserConfigData = toml::from_str(user_toml).unwrap();
+        merge_user_config(&mut config, user_cfg);
+
+        assert!(config.defaults.ro_home.contains(&".cache".to_string()));
+        assert!(!config.defaults.rw_cache.contains(&".cache".to_string()));
+    }
+
+    #[test]
+    fn test_load_effective_config_malformed_has_location() {
+        let dir = tempdir().unwrap();
+        let home = dir.path();
+        let cfg_dir = home.join(".config").join("cave");
+        fs::create_dir_all(&cfg_dir).unwrap();
+        fs::write(cfg_dir.join("profiles.toml"), "invalid [ toml syntax :::").unwrap();
+
+        let res = load_effective_config(home);
+        assert!(res.is_err());
+        let err = res.err().unwrap();
+        assert!(err.contains("Error parsing user config file"));
+        assert!(err.contains("line"));
+    }
+
+    #[test]
+    fn test_load_effective_config_absent_ok() {
+        let dir = tempdir().unwrap();
+        let res = load_effective_config(dir.path());
+        assert!(res.is_ok());
+        let cfg = res.unwrap();
+        assert!(cfg.profiles.contains_key("claude"));
     }
 }
