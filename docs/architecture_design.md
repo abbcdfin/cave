@@ -91,3 +91,4 @@ Decided 2026-09-17.
 - **Walking skeleton.** Terminal handling and the file boundary ship together as one thin `cave claude`: without the boundary, terminal passthrough is plain `exec`, and the terminal approach depends on the backend.
 - **Boundary tests first.** The Scope boundary is written as executable tests before the skeleton is built; passing them is its exit criterion.
 - **Profiles instead of presets.** Per-agent support is profile data on the Phase 2 engine rather than a separate presets phase.
+- **Dogfood before widening** (decided 2026-10-22): Phase 3 adds the `agy` profile first, so cave's own development runs under cave, then the user config file, then the remaining profiles. Running the tool on itself exposes profile gaps faster than adding profiles for agents not in daily use, and the config file lands second so later profiles can be validated by editing a file instead of rebuilding.

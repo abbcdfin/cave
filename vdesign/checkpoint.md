@@ -1,16 +1,18 @@
 # Checkpoint
 
 ## Current State
-- Phase 2 (Walking Skeleton — `cave claude`) is complete and collapsed:
-  - Rust implementation (`cli`, `policy`, `bwrap`, `profiles.toml`).
-  - Hardened boundary test suite (12 unit tests, 11 boundary tests passing).
-  - All review bugs fixed (mount ordering, `$HOME` CWD warning, raw `OsString` args, first-run state auto-creation with valid JSON seeding).
-  - Clippy clean (0 warnings), 7.37 ms startup overhead (< 100 ms budget).
-  - Linux VFS single-file bind mount point rename constraint (`EBUSY`) documented in `docs/architecture_design.md` and `src/policy.rs`.
-  - Manual exit verification (2.R4) confirmed on host terminal: interactive TTY, resize, signals, and Claude Code setting persistence across sessions.
-  - Phase 2 marked `[x]` in `vdesign/plan.md`.
+- Phase 2 (Walking Skeleton — `cave claude`) complete and collapsed into `plan.md`.
+- Phase 3 (Agent Profiles & Diagnostics) accepted and under construction; board in
+  [`vdesign/active_plan.md`](active_plan.md), sequenced for dogfooding: `agy` profile (3.1),
+  unknown-agent warning (3.2), user config file layering (3.3), profile refinement (3.4),
+  `--doctor` completion (3.5).
+- Phase 3 precondition resolved 2026-10-22: `agy` is a terminal CLI with state under `~/.gemini`;
+  `/usr/bin/antigravity` is the GUI launcher, and `~/.antigravity` and `~/.config/Antigravity`
+  are the IDE's directories, not the CLI's.
 
 ## Next Steps
-- Software Architect planning Phase 3 (Agent Profiles & Diagnostics):
-  - Draft granular Phase 3 board in `vdesign/active_plan.md`.
-  - Review with user before execution.
+- Developer executes 3.1: `[profiles.agy]` with `state = ~/.gemini`, boundary test, and live
+  verification that a session resumes in both directions between host and cave.
+- Open engine decision deferred to 3.4: a read-only subpath inside a read-write state directory
+  (`~/.gemini/antigravity-cli/bin`) is not expressible while `runtime` renders before `state`.
+- Review each slice before it is collapsed.
