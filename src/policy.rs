@@ -44,6 +44,15 @@ pub struct DefaultsConfig {
     pub tmpfs: Vec<String>,
 }
 
+/// Declared host state entry for an agent.
+///
+/// NOTE on single-file bind mounts vs kernel rename:
+/// When a single file (e.g. `~/.claude.json`) is bind-mounted directly, Linux VFS treats
+/// that path inside the mount namespace as an active mount point. Any process inside the
+/// sandbox attempting an atomic file replacement via `rename(temp, target)` will receive
+/// `EBUSY`. Claude Code updates config in-place (`open(O_WRONLY|O_TRUNC)`), which succeeds
+/// on the existing inode. To prevent a 0-byte corrupt file on first run, `init` seeds
+/// newly-created state files with valid initial content (e.g. `"{}"`).
 #[derive(Debug, Deserialize, Clone)]
 pub struct StateEntry {
     pub path: String,

@@ -1,19 +1,15 @@
 # Checkpoint
 
 ## Current State
-- Phase 2 (Walking Skeleton — `cave claude`) is complete:
-  - Rust implementation (`cli`, `policy`, `bwrap`, `profiles.toml`).
-  - Hardened boundary test suite (12 unit tests, 11 boundary tests passing).
-  - All 4 core remediation bugs fixed (mount ordering, `$HOME` CWD warning, atomic state writes with JSON seeding, first-run state auto-creation).
-  - Clippy clean (0 warnings).
-  - Benchmark overhead verified at 7.37 ms (budget < 100 ms).
-  - Direct execution verified against host `claude` (version and session invocation inside sandbox).
-  - Phase 2 remediation committed in commit `70eba8f`.
+- Phase 2 (Walking Skeleton — `cave claude`) is reopened pending Task 2.R4 manual terminal evidence:
+  - Engineering fixes verified: 12 unit tests and 11 boundary tests passing (`cargo test`), 0 clippy warnings.
+  - Mount ordering preserved, canonicalized CWD warning implemented, raw `OsString` args preserved, first-run state auto-creation with valid JSON seeding verified.
+  - Documented Linux VFS single-file bind mount point rename constraint (`EBUSY`) in `docs/architecture_design.md` and `src/policy.rs`.
+  - Clarified `--doctor` scope (DNS check and `/var/run` symlink check scheduled for Phase 3) in `docs/architecture_design.md`.
 
 ## Next Steps
-- Transition to Phase 3: Agent Profiles & Diagnostics.
-  - Populate `vdesign/active_plan.md` with granular tasks for Phase 3:
-    1. Agent Profiles data (Aider, Antigravity `agy`, generic CLI).
-    2. Unknown agent warning verification & test coverage.
-    3. User config layering (`~/.config/cave/profiles.toml` append semantics).
-    4. Diagnostic display in `cave --doctor` (config sources and merged effective table).
+- Execute Task 2.R4 manual terminal verification at an interactive host terminal:
+  1. `target/release/cave claude --dangerously-skip-permissions`
+  2. Verify terminal resize (`SIGWINCH`), colors, Ctrl-C (`SIGINT`), and Ctrl-Z / `fg` (`SIGTSTP`).
+  3. Change a setting inside the session (e.g. `/config`), exit, and verify native `claude` reflects the updated setting on the host.
+- Once verified, mark 2.R4 complete in `vdesign/active_plan.md`, mark Phase 2 `[x]` in `vdesign/plan.md`, and collapse Phase 2.
