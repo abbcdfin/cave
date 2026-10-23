@@ -1,15 +1,19 @@
 # Checkpoint
 
 ## Current State
-- Phase 4 Remediation active in [`vdesign/active_plan.md`](active_plan.md):
-  - Addressed review findings regarding premature makepkg validation claims, README installation/isolation accuracy, .npmrc example reconciliation, and PKGBUILD build/check targets.
-  - Test suite passing: 18 unit tests, 19 boundary tests (37 total, 0 clippy warnings).
-- Prior roadmap phases (Phases 1-3) completed and collapsed into `plan.md`.
+- Phase 4 (Arch Linux Packaging & Distribution) remediated, completed, and collapsed into `plan.md`:
+  - Created `packaging/arch/PKGBUILD` for `cave-git` (VCS package for Arch Linux / AUR).
+  - Runtime dependency on `bubblewrap`, build dependencies on `cargo` and `git`.
+  - Added MIT `LICENSE` to root and enhanced `Cargo.toml` package metadata (license, description, repository, homepage, readme).
+  - Reconciled `README.md`: accurate installation semantics (git branch build vs local cargo testing), clarified default `~/.config` inheritance isolation, and removed privileged `.npmrc` from config examples.
+  - Recorded detailed packaging rationale in `docs/architecture_design.md` (clean chroot builds, unit test check isolation, -git package vs release tarball).
+  - Committed and pushed changes (`ebfbc20`) to `origin/main` on GitHub.
+  - Rebuilt package from GitHub source with `makepkg`: produced `cave-git-0.1.0.r18.gebfbc20-1-x86_64.pkg.tar.zst`.
+  - Verified archive contents with `tar -tf`: contains `/usr/bin/cave`, documentation, license, and `/usr/share/doc/cave/profiles.toml.example`.
+- Test suite passing: 18 unit tests, 19 boundary tests (37 total, 0 clippy warnings).
+- All planned roadmap phases in `vdesign/plan.md` (Phases 1-4) are complete.
 
 ## Next Steps
-- Execute Task 4.R1: Fix `README.md` (reconcile `.npmrc` example, clarify `.config` isolation, clarify git vs local install).
-- Execute Task 4.R2: Record detailed rationale for `-git` package in `docs/architecture_design.md`.
-- Execute Task 4.R3: Refine `packaging/arch/PKGBUILD` (`--bin cave`, unit tests in `check()`, remove dead `elif`).
-- Execute Task 4.R4: Commit and push changes to GitHub.
-- Execute Task 4.R5: Rebuild with `makepkg -f` and verify complete package contents (`cave`, `README.md`, `profiles.toml.example`, `LICENSE`).
-- Execute Task 4.R6: Run full verification and collapse Phase 4.
+- Optionally submit/publish `cave-git` to the Arch User Repository (AUR).
+- Review and dogfood `cave` across daily workflows (`claude`, `agy`, `aider`).
+- Evaluate candidate backlog in `vdesign/plan.md` for subsequent phases (e.g. generic CLI fallback profile, network policy filtering, ephemeral git branch / copy-on-write snapshotting, opt-in Docker access).
