@@ -14,6 +14,7 @@
 - All planned roadmap phases in `vdesign/plan.md` (Phases 1-4) are complete.
 
 ## Next Steps
+- Build Phase 5 (SSH via the host ssh-agent) from the accepted board in `vdesign/active_plan.md`, starting with 5.1.
 - Optionally submit/publish `cave-git` to the Arch User Repository (AUR).
 - Review and dogfood `cave` across daily workflows (`claude`, `agy`, `aider`).
 - Evaluate candidate backlog in `vdesign/plan.md` for subsequent phases (e.g. generic CLI fallback profile, network policy filtering, ephemeral git branch / copy-on-write snapshotting, opt-in Docker access).

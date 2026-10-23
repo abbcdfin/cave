@@ -24,6 +24,7 @@ cave protects against an agent that *accidentally* reaches files outside the all
 - **Shared tool caches** (`~/.cache`, and caches such as `~/.cargo/registry` kept elsewhere) are read-write: they are disposable, and hiding them repeats every download.
 - **Everything else is hidden**, including the rest of the home directory (`~/.config` too) and the host's `/tmp` and `/run` (the sandbox gets private ones).
 - **The agent's own config and sessions are the host's** (decided 2026-10-22): declared agent state is the live host directory, not a copy, so a session started under cave continues on the host and the reverse. An agent cave has no profile for gets an ephemeral home instead; cave warns on startup rather than losing its state in silence.
+- **SSH keys are usable, not readable** (decided 2026-10-23): the host ssh-agent is forwarded by default, so git over ssh works, while the key files stay hidden. `--no-ssh` turns it off for a session.
 - Ordinary commands that reach host files through a service count as file access, so those services are hidden too: the Docker socket (`docker run -v /:/host`) and the user session bus (`systemctl --user`).
 
 Out of scope:
