@@ -78,13 +78,13 @@ fn main() -> ExitCode {
             }
 
             // Explicit host side-effect: prepare declared state directories/files
-            if let Err(e) = prepare_host_state(&opts.agent_cmd, &home) {
+            if let Err(e) = prepare_host_state(&opts.agent_cmd, &home, &config) {
                 eprintln!("Error: failed to prepare host state paths: {e}");
                 return ExitCode::from(1);
             }
 
             // Pure policy evaluation: build mount and environment plan
-            let plan = build_mount_plan(&opts, &home, &cwd, uid);
+            let plan = build_mount_plan(&opts, &home, &cwd, uid, &config);
             let bwrap_args = render_args(&plan, &opts.agent_cmd, &opts.agent_args);
 
             let err = exec_bwrap(&bwrap_bin, &bwrap_args);

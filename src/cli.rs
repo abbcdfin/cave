@@ -225,34 +225,70 @@ pub fn run_doctor() -> bool {
         println!("  [OK] /var/run is absent or inaccessible");
     }
 
-    // 5. Test DNS resolution inside sandbox
-    if let Some(ref home) = home_path {
+    // 5. Test DNS configuration and resolution inside sandbox
+    let effective_config = if let Some(ref home) = home_path {
+        match crate::policy::load_effective_config(home) {
+            Ok(c) => Some(c),
+            Err(e) => {
+                println!("  [FAIL] Failed to load configuration: {e}");
+                ok = false;
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    if let (Some(home), Some(config)) = (&home_path, &effective_config) {
         let bwrap_res = crate::bwrap::check_bwrap_available();
-        if let Ok(bwrap_bin) = bwrap_res {
+        if let Ok(ref bwrap_bin) = bwrap_res {
+            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
+            let uid = unsafe { libc::getuid() };
+
+            // 5a. Require nameserver line in sandboxed /etc/resolv.conf (offline-capable)
             let test_opts = RunOptions {
                 extra_dirs: vec![],
                 agent_cmd: std::ffi::OsString::from("sh"),
                 agent_args: vec![
                     std::ffi::OsString::from("-c"),
-                    std::ffi::OsString::from("getent ahostsv4 localhost || getent hosts localhost || true"),
+                    std::ffi::OsString::from("grep -E '^[[:space:]]*nameserver[[:space:]]+' /etc/resolv.conf"),
                 ],
             };
-            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
-            let uid = unsafe { libc::getuid() };
-            let plan = crate::policy::build_mount_plan(&test_opts, home, &cwd, uid);
+            let plan = crate::policy::build_mount_plan(&test_opts, home, &cwd, uid, config);
             let bwrap_args = crate::bwrap::render_args(&plan, &test_opts.agent_cmd, &test_opts.agent_args);
             let check_output = std::process::Command::new(bwrap_bin)
                 .args(&bwrap_args)
                 .output();
             match check_output {
-                Ok(out) if out.status.success() && String::from_utf8_lossy(&out.stdout).contains("127.0.0.1") => {
-                    println!("  [OK] sandbox DNS resolution verified (resolved localhost to 127.0.0.1)");
+                Ok(out) if out.status.success() => {
+                    println!("  [OK] sandbox /etc/resolv.conf contains configured nameserver");
+
+                    // 5b. Optional probe for external DNS resolution (warning only if offline, timeout 3s)
+                    let ext_opts = RunOptions {
+                        extra_dirs: vec![],
+                        agent_cmd: std::ffi::OsString::from("sh"),
+                        agent_args: vec![
+                            std::ffi::OsString::from("-c"),
+                            std::ffi::OsString::from("timeout 3 sh -c 'getent ahostsv4 anthropic.com >/dev/null 2>&1 || getent ahostsv4 dns.google >/dev/null 2>&1'"),
+                        ],
+                    };
+                    let ext_plan = crate::policy::build_mount_plan(&ext_opts, home, &cwd, uid, config);
+                    let ext_args = crate::bwrap::render_args(&ext_plan, &ext_opts.agent_cmd, &ext_opts.agent_args);
+                    if let Ok(ext_out) = std::process::Command::new(bwrap_bin).args(&ext_args).output() {
+                        if ext_out.status.success() {
+                            println!("  [OK] external DNS lookup verified");
+                        } else {
+                            println!("  [WARN] external DNS lookup failed (offline or network blocked)");
+                        }
+                    }
                 }
-                Ok(out) => {
-                    println!("  [WARN] sandbox DNS resolution returned non-zero or unexpected output: {:?}", out.status.code());
+                Ok(_) => {
+                    println!("  [FAIL] sandbox /etc/resolv.conf has no nameserver configured");
+                    ok = false;
                 }
                 Err(e) => {
-                    println!("  [WARN] sandbox DNS resolution check failed to run: {e}");
+                    println!("  [FAIL] sandbox DNS check failed to execute: {e}");
+                    ok = false;
                 }
             }
         }
@@ -260,38 +296,30 @@ pub fn run_doctor() -> bool {
 
     // 6. Print loaded configuration sources and effective merged table
     println!();
-    if let Some(ref home) = home_path {
-        match crate::policy::load_effective_config(home) {
-            Ok(config) => {
-                println!("Loaded configuration sources:");
-                for src in &config.sources {
-                    println!("  - {src}");
-                }
-                println!();
-                println!("Effective merged configuration:");
-                println!("  Defaults:");
-                println!("    ro_system ({} paths): {:?}", config.defaults.ro_system.len(), config.defaults.ro_system);
-                println!("    ro_home   ({} paths): {:?}", config.defaults.ro_home.len(), config.defaults.ro_home);
-                println!("    rw_cache  ({} paths): {:?}", config.defaults.rw_cache.len(), config.defaults.rw_cache);
-                println!("    tmpfs     ({} paths): {:?}", config.defaults.tmpfs.len(), config.defaults.tmpfs);
-                println!("  Profiles:");
-                let mut profile_names: Vec<_> = config.profiles.keys().collect();
-                profile_names.sort();
-                for name in profile_names {
-                    let prof = &config.profiles[name];
-                    println!("    [{name}]");
-                    if !prof.runtime.is_empty() {
-                        println!("      runtime (RO): {:?}", prof.runtime);
-                    }
-                    if !prof.state.is_empty() {
-                        let state_repr: Vec<_> = prof.state.iter().map(|s| format!("{} ({})", s.path, s.kind)).collect();
-                        println!("      state   (RW): {:?}", state_repr);
-                    }
-                }
+    if let Some(ref config) = effective_config {
+        println!("Loaded configuration sources:");
+        for src in &config.sources {
+            println!("  - {src}");
+        }
+        println!();
+        println!("Effective merged configuration:");
+        println!("  Defaults:");
+        println!("    ro_system ({} paths): {:?}", config.defaults.ro_system.len(), config.defaults.ro_system);
+        println!("    ro_home   ({} paths): {:?}", config.defaults.ro_home.len(), config.defaults.ro_home);
+        println!("    rw_cache  ({} paths): {:?}", config.defaults.rw_cache.len(), config.defaults.rw_cache);
+        println!("    tmpfs     ({} paths): {:?}", config.defaults.tmpfs.len(), config.defaults.tmpfs);
+        println!("  Profiles:");
+        let mut profile_names: Vec<_> = config.profiles.keys().collect();
+        profile_names.sort();
+        for name in profile_names {
+            let prof = &config.profiles[name];
+            println!("    [{name}]");
+            if !prof.runtime.is_empty() {
+                println!("      runtime (RO): {:?}", prof.runtime);
             }
-            Err(e) => {
-                println!("  [FAIL] Failed to load configuration: {e}");
-                ok = false;
+            if !prof.state.is_empty() {
+                let state_repr: Vec<_> = prof.state.iter().map(|s| format!("{} ({})", s.path, s.kind)).collect();
+                println!("      state   (RW): {:?}", state_repr);
             }
         }
     }

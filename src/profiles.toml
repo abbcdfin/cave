@@ -15,7 +15,8 @@ ro_home = [
     ".local/bin",
     ".cargo/bin",
     ".rustup",
-    ".gitconfig"
+    ".gitconfig",
+    ".local/share/uv"
 ]
 rw_cache = [
     ".cache",
@@ -44,35 +45,20 @@ kind = "file"
 init = "{}"
 
 [profiles.agy]
-runtime = [
-    ".gemini/antigravity-cli/bin"
-]
+runtime = []
 
 [[profiles.agy.state]]
 path = ".gemini"
 kind = "dir"
 
 [profiles.aider]
-runtime = []
+runtime = [
+    ".aider.conf.yml"
+]
 
 [[profiles.aider.state]]
 path = ".aider"
 kind = "dir"
-
-[[profiles.aider.state]]
-path = ".aider.conf.yml"
-kind = "file"
-init = ""
-
-[[profiles.aider.state]]
-path = ".aider.chat.history.md"
-kind = "file"
-init = ""
-
-[[profiles.aider.state]]
-path = ".aider.input.history"
-kind = "file"
-init = ""
 
 [profiles.sh]
 runtime = []

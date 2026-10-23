@@ -42,7 +42,8 @@ impl HermeticFixture {
         fs::write(config_dir.join("credentials"), "TOKEN").unwrap();
 
         // Initialize declared claude state using policy::prepare_host_state
-        cave::policy::prepare_host_state(OsStr::new("claude"), &fake_home).unwrap();
+        let default_config = cave::policy::load_config();
+        cave::policy::prepare_host_state(OsStr::new("claude"), &fake_home, &default_config).unwrap();
 
         let cache_dir = fake_home.join(".cache");
         fs::create_dir_all(&cache_dir).unwrap();
@@ -472,18 +473,13 @@ fn test_agy_profile_boundary() {
     let fixture = HermeticFixture::new();
 
     let script = r#"
-        # 1. ~/.gemini is read-write
+        # 1. ~/.gemini is read-write, including antigravity-cli/bin for agentapi script creation
         echo "cave agy write test" > "$HOME/.gemini/test_write.txt"
         test -f "$HOME/.gemini/test_write.txt"
+        echo "agentapi script" > "$HOME/.gemini/antigravity-cli/bin/agentapi"
+        test -f "$HOME/.gemini/antigravity-cli/bin/agentapi"
 
-        # 2. ~/.gemini/antigravity-cli/bin is read-only (subpath protection inside RW state dir)
-        test -f "$HOME/.gemini/antigravity-cli/bin/tool.sh"
-        if echo "overwrite" >> "$HOME/.gemini/antigravity-cli/bin/tool.sh" 2>/dev/null; then
-            echo "FAIL: ~/.gemini/antigravity-cli/bin should be read-only!"
-            exit 1
-        fi
-
-        # 3. ~/.antigravity and ~/.config/Antigravity are hidden
+        # 2. ~/.antigravity and ~/.config/Antigravity are hidden
         if test -e "$HOME/.antigravity"; then
             echo "FAIL: ~/.antigravity is visible!"
             exit 1
@@ -493,7 +489,7 @@ fn test_agy_profile_boundary() {
             exit 1
         fi
 
-        # 4. ~/.ssh is hidden
+        # 3. ~/.ssh is hidden
         if test -e "$HOME/.ssh"; then
             echo "FAIL: ~/.ssh is visible!"
             exit 1
@@ -508,20 +504,31 @@ fn test_agy_profile_boundary() {
     assert!(host_write.exists(), "Host ~/.gemini state was not written!");
     let content = fs::read_to_string(host_write).unwrap();
     assert_eq!(content.trim(), "cave agy write test");
+
+    let host_agentapi = fixture.fake_home.join(".gemini").join("antigravity-cli").join("bin").join("agentapi");
+    assert!(host_agentapi.exists(), "Host agentapi was not written!");
 }
 
 #[test]
 fn test_aider_profile_boundary() {
     let fixture = HermeticFixture::new();
 
+    // Host fixture has existing user config
+    fs::write(fixture.fake_home.join(".aider.conf.yml"), "initial_conf: true\n").unwrap();
+
     let script = r#"
-        # 1. ~/.aider and ~/.aider.conf.yml are read-write
+        # 1. ~/.aider.conf.yml is read-only runtime
         test -f "$HOME/.aider.conf.yml"
-        echo "verbose: true" >> "$HOME/.aider.conf.yml"
+        if echo "verbose: true" >> "$HOME/.aider.conf.yml" 2>/dev/null; then
+            echo "FAIL: ~/.aider.conf.yml should be read-only!"
+            exit 1
+        fi
+
+        # 2. ~/.aider is read-write state
         echo "session" > "$HOME/.aider/session.txt"
         test -f "$HOME/.aider/session.txt"
 
-        # 2. Sensitive directories stay hidden
+        # 3. Sensitive directories stay hidden
         if test -e "$HOME/.ssh"; then
             echo "FAIL: ~/.ssh is visible!"
             exit 1
@@ -531,10 +538,10 @@ fn test_aider_profile_boundary() {
     let output = fixture.run_cave_agent(fixture.fake_aider_bin.to_str().unwrap(), &[], script);
     fixture.assert_success_with_sentinel(&output);
 
-    // Verify on host that writes persisted
+    // Verify on host that conf was NOT modified, but session was created
     let host_conf = fixture.fake_home.join(".aider.conf.yml");
     let conf_content = fs::read_to_string(host_conf).unwrap();
-    assert!(conf_content.contains("verbose: true"));
+    assert_eq!(conf_content.trim(), "initial_conf: true");
 
     let host_session = fixture.fake_home.join(".aider").join("session.txt");
     assert!(host_session.exists());
@@ -637,12 +644,48 @@ fn test_doctor_command_outputs_diagnostics() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("bubblewrap found"));
     assert!(stdout.contains("/var/run is a symlink"));
-    assert!(stdout.contains("sandbox DNS resolution verified"));
+    assert!(stdout.contains("sandbox /etc/resolv.conf contains configured nameserver"));
     assert!(stdout.contains("Loaded configuration sources:"));
     assert!(stdout.contains("Effective merged configuration:"));
     assert!(stdout.contains("[claude]"));
     assert!(stdout.contains("[agy]"));
     assert!(stdout.contains("[aider]"));
+}
+
+#[test]
+fn test_real_aider_version_execution() {
+    // If aider is installed on the host (e.g. via uv in ~/.local/bin), verify it runs under cave
+    let which_aider = Command::new("which")
+        .arg("aider")
+        .output();
+
+    if let Ok(out) = which_aider {
+        if !out.status.success() {
+            println!("aider not found on PATH, skipping test_real_aider_version_execution");
+            return;
+        }
+        let aider_path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if !aider_path.is_empty() && Path::new(&aider_path).exists() {
+            let cave_bin = env!("CARGO_BIN_EXE_cave");
+            let cave_output = Command::new(cave_bin)
+                .arg("aider")
+                .arg("--version")
+                .output()
+                .expect("Failed to run cave aider --version");
+
+            assert!(
+                cave_output.status.success(),
+                "cave aider --version failed: status={:?}, stderr={}",
+                cave_output.status,
+                String::from_utf8_lossy(&cave_output.stderr)
+            );
+            let version_stdout = String::from_utf8_lossy(&cave_output.stdout);
+            assert!(
+                version_stdout.contains("aider"),
+                "Expected 'aider' in version output, got: {version_stdout}"
+            );
+        }
+    }
 }
 
 

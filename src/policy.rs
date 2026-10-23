@@ -192,9 +192,7 @@ pub fn agent_basename(agent_cmd: &OsStr) -> &str {
 
 /// Explicit host side-effect step: ensures declared state files/directories exist
 /// before mounting so they can persist, seeding files with valid initial content.
-pub fn prepare_host_state(agent_cmd: &OsStr, home_dir: &Path) -> std::io::Result<()> {
-    let config = load_effective_config(home_dir)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+pub fn prepare_host_state(agent_cmd: &OsStr, home_dir: &Path, config: &ConfigData) -> std::io::Result<()> {
     let name = agent_basename(agent_cmd);
 
     if let Some(profile) = config.profiles.get(name) {
@@ -215,14 +213,14 @@ pub fn prepare_host_state(agent_cmd: &OsStr, home_dir: &Path) -> std::io::Result
     Ok(())
 }
 
-/// Pure policy function: builds ordered mount plan without mutating the host filesystem.
+/// Pure policy function: builds ordered mount plan without mutating the host filesystem or reading disk.
 pub fn build_mount_plan(
     options: &RunOptions,
     home_dir: &Path,
     cwd: &Path,
     uid: u32,
+    config: &ConfigData,
 ) -> MountPlan {
-    let config = load_effective_config(home_dir).unwrap_or_else(|_| load_config());
     let mut mounts = Vec::new();
 
     // 1. Kernel filesystems
@@ -415,9 +413,8 @@ mod tests {
 
         // Initially absent
         assert!(!home.join(".claude").exists());
-        assert!(!home.join(".claude.json").exists());
-
-        prepare_host_state(OsStr::new("claude"), &home).unwrap();
+        let config = load_config();
+        prepare_host_state(OsStr::new("claude"), &home, &config).unwrap();
 
         // .claude is created as dir
         assert!(home.join(".claude").is_dir());
@@ -441,8 +438,9 @@ mod tests {
             agent_args: vec![],
         };
 
+        let config = load_config();
         // Calling build_mount_plan does not create missing files on host
-        let _plan = build_mount_plan(&opts, &home, &cwd, 1000);
+        let _plan = build_mount_plan(&opts, &home, &cwd, 1000, &config);
         assert!(!home.join(".claude").exists());
         assert!(!home.join(".claude.json").exists());
     }
@@ -465,7 +463,8 @@ mod tests {
             agent_args: vec![],
         };
 
-        let plan = build_mount_plan(&opts, &home, &cwd, 1000);
+        let config = load_config();
+        let plan = build_mount_plan(&opts, &home, &cwd, 1000, &config);
 
         let canonical_cwd = fs::canonicalize(&cwd).unwrap();
         let canonical_sub = fs::canonicalize(&sub).unwrap();
@@ -561,5 +560,54 @@ mod tests {
         assert!(res.is_ok());
         let cfg = res.unwrap();
         assert!(cfg.profiles.contains_key("claude"));
+    }
+
+    #[test]
+    fn test_profile_mount_order_state_before_runtime() {
+        let dir = tempdir().unwrap();
+        let home = dir.path();
+        let state_dir = home.join(".test_agent");
+        let runtime_subpath = state_dir.join("bin");
+        fs::create_dir_all(&runtime_subpath).unwrap();
+
+        let cfg_dir = home.join(".config").join("cave");
+        fs::create_dir_all(&cfg_dir).unwrap();
+        let user_toml = r#"
+            [profiles.test_agent]
+            runtime = [".test_agent/bin"]
+            [[profiles.test_agent.state]]
+            path = ".test_agent"
+            kind = "dir"
+        "#;
+        fs::write(cfg_dir.join("profiles.toml"), user_toml).unwrap();
+
+        let cwd = PathBuf::from("/");
+        let opts = RunOptions {
+            extra_dirs: vec![],
+            agent_cmd: OsString::from("test_agent"),
+            agent_args: vec![],
+        };
+
+        let config = load_effective_config(home).expect("effective config loads");
+        let plan = build_mount_plan(&opts, home, &cwd, 1000, &config);
+
+        let mut state_idx = None;
+        let mut runtime_idx = None;
+
+        for (idx, mount) in plan.mounts.iter().enumerate() {
+            if mount.target_path == state_dir && mount.kind == MountKind::BindReadWrite {
+                state_idx = Some(idx);
+            }
+            if mount.target_path == runtime_subpath && mount.kind == MountKind::BindReadOnly {
+                runtime_idx = Some(idx);
+            }
+        }
+
+        assert!(state_idx.is_some(), "State mount not found");
+        assert!(runtime_idx.is_some(), "Runtime mount not found");
+        assert!(
+            state_idx.unwrap() < runtime_idx.unwrap(),
+            "State (RW) must be mounted before Runtime (RO) so subpaths can be read-only"
+        );
     }
 }
