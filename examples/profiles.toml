@@ -1,0 +1,46 @@
+# cave — Example User Configuration
+#
+# Place this file at ~/.config/cave/profiles.toml (or $XDG_CONFIG_HOME/cave/profiles.toml).
+#
+# Merge Rules:
+# - User configuration layers over cave's built-in defaults with append semantics.
+# - Re-declaring a path in a different list moves it across classes (e.g. declaring
+#   ".cache" under ro_home downgrades it from read-write cache to read-only).
+# - Paths relative to $HOME must not start with a leading slash.
+# - To inspect the effective merged configuration, run: cave --doctor
+
+[defaults]
+# Additional host system directories or files to mount read-only
+# (Built-in defaults include /usr, /etc, /var, /sys, /bin, /sbin, /lib*, /opt)
+ro_system = [
+    # "/opt/custom-toolchain",
+]
+
+# Additional files or directories under host $HOME to mount read-only
+# (Built-in defaults include .local/bin, .cargo/bin, .rustup, .gitconfig, .local/share/uv)
+ro_home = [
+    # ".npmrc",
+    # ".config/git",
+]
+
+# Additional host cache directories under $HOME to mount read-write
+# (Built-in defaults include .cache, .cargo/registry, .cargo/git, .npm)
+rw_cache = [
+    # ".cache/pip",
+    # ".local/share/virtualenvs",
+]
+
+# Custom agent profiles
+# Profile is selected by matching the agent binary's basename (e.g. 'myagent').
+#
+# Example: Custom agent with read-only config and read-write state
+[profiles.myagent]
+# Read-only configuration or toolchain files under $HOME
+runtime = [
+    # ".config/myagent/config.json",
+]
+
+# Read-write state directories or files under $HOME
+[[profiles.myagent.state]]
+path = ".myagent"
+kind = "dir"

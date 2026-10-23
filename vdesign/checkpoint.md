@@ -1,18 +1,15 @@
 # Checkpoint
 
 ## Current State
-- Phase 3 (Agent Profiles & Diagnostics) completed and collapsed into `plan.md`.
-  - Added profiles for `agy` (`~/.gemini` RW state), `aider` (`~/.aider` RW state, `~/.aider.conf.yml` RO runtime), and shells (`sh`, `bash`, `zsh`).
-  - Swapped profile mount loop in `policy.rs` so `state` renders before `runtime`, enabling read-only subpath protection inside read-write directories.
-  - Implemented unknown-agent warning on stderr when no profile matches the agent basename, silencing known shells.
-  - User config file layering (`${XDG_CONFIG_HOME:-$HOME/.config}/cave/profiles.toml`) over embedded defaults with append semantics, downgrade-by-re-declaration, and fatal located parse errors.
-  - Config loaded once (`main.rs`, `cli.rs`) and passed as `&ConfigData`: neither `build_mount_plan` nor `prepare_host_state` reads config, and `prepare_host_state` is the only host write.
-  - Completed `cave --doctor` diagnostics: verifies `bwrap` availability, unprivileged user namespaces, AppArmor restrictions, `/var/run` symlink to `/run`, sandboxed `/etc/resolv.conf` nameserver presence, non-fatal external DNS lookup, and prints config sources and effective merged profile table.
-  - Dogfooding and manual verification: live interactive session persistence confirmed across host/cave boundary for `claude` and `agy`.
-  - Test suite passing: 17 unit tests, 19 boundary tests (36 total, 0 clippy warnings).
-  - Measured release startup overhead: 8.96 ms (budget < 100 ms).
-- All planned roadmap phases in `vdesign/plan.md` (Phases 1-3) are complete.
+- Phase 4 Remediation active in [`vdesign/active_plan.md`](active_plan.md):
+  - Addressed review findings regarding premature makepkg validation claims, README installation/isolation accuracy, .npmrc example reconciliation, and PKGBUILD build/check targets.
+  - Test suite passing: 18 unit tests, 19 boundary tests (37 total, 0 clippy warnings).
+- Prior roadmap phases (Phases 1-3) completed and collapsed into `plan.md`.
 
 ## Next Steps
-- Review and dogfood `cave` across supported agents (`claude`, `agy`, `aider`).
-- Evaluate candidate backlog in `vdesign/plan.md` for potential next phase (e.g. generic CLI fallback profile, network policy filtering, ephemeral git branch / copy-on-write snapshotting, opt-in Docker access).
+- Execute Task 4.R1: Fix `README.md` (reconcile `.npmrc` example, clarify `.config` isolation, clarify git vs local install).
+- Execute Task 4.R2: Record detailed rationale for `-git` package in `docs/architecture_design.md`.
+- Execute Task 4.R3: Refine `packaging/arch/PKGBUILD` (`--bin cave`, unit tests in `check()`, remove dead `elif`).
+- Execute Task 4.R4: Commit and push changes to GitHub.
+- Execute Task 4.R5: Rebuild with `makepkg -f` and verify complete package contents (`cave`, `README.md`, `profiles.toml.example`, `LICENSE`).
+- Execute Task 4.R6: Run full verification and collapse Phase 4.

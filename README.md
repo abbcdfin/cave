@@ -25,6 +25,32 @@ cave aider --architect
 
 The terminal opens directly into the agent session in your current working directory. cave passes agent arguments through unchanged: YOLO mode is on only when you pass the agent's own flag.
 
+## Installation
+
+### Arch Linux (AUR / PKGBUILD)
+
+Build and install the package from the pushed GitHub branch:
+
+```bash
+cd packaging/arch
+makepkg -si
+```
+
+Or install using an AUR helper once published:
+
+```bash
+yay -S cave-git
+```
+
+### From Source (Local Development)
+
+To test uncommitted local changes directly:
+
+```bash
+cargo build --release
+install -Dm755 target/release/cave ~/.local/bin/cave
+```
+
 ## CLI Syntax
 
 ```bash
@@ -42,6 +68,44 @@ cave options must come before the agent command; everything from the agent comma
 | `cave --dir ../shared-lib claude` | Also allows read-write access to `../shared-lib` |
 | `cave --ro-dir ~/reference claude` | Also allows read-only access to `~/reference` |
 | `cave --doctor` | Inspects sandbox backend availability and permissions |
+
+## Configuration
+
+`cave` works out of the box with embedded profiles for supported agents (`claude`, `agy`, `aider`, `sh`, `bash`, `zsh`).
+
+To customize mount paths or define new agent profiles, create a configuration file at:
+`~/.config/cave/profiles.toml` (or `${XDG_CONFIG_HOME:-$HOME/.config}/cave/profiles.toml`)
+
+A starter template is available in [`examples/profiles.toml`](examples/profiles.toml) (installed to `/usr/share/doc/cave/profiles.toml.example`):
+
+```bash
+install -Dm644 /usr/share/doc/cave/profiles.toml.example ~/.config/cave/profiles.toml
+```
+
+### Example `~/.config/cave/profiles.toml`
+
+```toml
+[defaults]
+# Additional system paths to mount read-only
+ro_system = ["/opt/custom-tool"]
+
+# Additional host home paths to mount read-only
+ro_home = [".config/git", ".config/nvim"]
+
+# Additional cache directories to mount read-write
+rw_cache = [".cache/pip"]
+
+# Define or extend an agent profile
+[profiles.myagent]
+runtime = [".config/myagent/config.json"]  # Read-only configuration
+[[profiles.myagent.state]]
+path = ".myagent"                          # Read-write state directory
+kind = "dir"
+```
+
+- **Layering**: User configuration appends to embedded defaults. Re-declaring an existing path moves it to the new class (e.g., downgrading `.cache` to `ro_home` makes it read-only).
+- **Isolation**: `~/.config/cave/` is hidden by default (since `$HOME` is an empty private tmpfs without `.config` mounted). It is visible only if you explicitly mount a parent directory (e.g. `--dir ~/.config`).
+- **Diagnostics**: Run `cave --doctor` to inspect loaded configuration sources and the effective merged table.
 
 ## Architecture & Roadmap
 

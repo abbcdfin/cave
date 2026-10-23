@@ -1,0 +1,52 @@
+# Maintainer: Jian Zhang <zhangjian@sys-in.com.cn>
+
+pkgname=cave-git
+_pkgname=cave
+pkgver=0.1.0.r17.g1b95c6b
+pkgrel=1
+pkgdesc="Transparent sandbox runner for coding agents in YOLO mode"
+arch=('x86_64')
+url="https://github.com/abbcdfin/cave"
+license=('MIT')
+depends=('bubblewrap')
+makedepends=('cargo' 'git')
+provides=("$_pkgname")
+conflicts=("$_pkgname")
+source=("$_pkgname::git+https://github.com/abbcdfin/cave.git")
+sha256sums=('SKIP')
+
+pkgver() {
+    cd "$srcdir/$_pkgname"
+    if git describe --long --tags >/dev/null 2>&1; then
+        git describe --long --tags | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g'
+    else
+        printf "0.1.0.r%s.g%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+    fi
+}
+
+prepare() {
+    cd "$srcdir/$_pkgname"
+    export RUSTUP_TOOLCHAIN=stable
+    cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+    cd "$srcdir/$_pkgname"
+    export RUSTUP_TOOLCHAIN=stable
+    export CARGO_TARGET_DIR=target
+    cargo build --frozen --release --bin cave
+}
+
+check() {
+    cd "$srcdir/$_pkgname"
+    export RUSTUP_TOOLCHAIN=stable
+    cargo test --frozen --lib --bins
+}
+
+package() {
+    cd "$srcdir/$_pkgname"
+    install -Dm755 "target/release/cave" "$pkgdir/usr/bin/cave"
+    install -Dm644 "README.md" "$pkgdir/usr/share/doc/cave/README.md"
+    install -Dm644 "examples/profiles.toml" "$pkgdir/usr/share/doc/cave/profiles.toml.example"
+    install -Dm644 "LICENSE" "$pkgdir/usr/share/licenses/cave/LICENSE"
+}

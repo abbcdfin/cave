@@ -610,4 +610,13 @@ mod tests {
             "State (RW) must be mounted before Runtime (RO) so subpaths can be read-only"
         );
     }
+
+    #[test]
+    fn test_example_profiles_toml_is_valid() {
+        let example_str = include_str!("../examples/profiles.toml");
+        let parsed: Result<UserConfigData, _> = toml::from_str(example_str);
+        assert!(parsed.is_ok(), "examples/profiles.toml failed to parse: {:?}", parsed.err());
+        let user_cfg = parsed.unwrap();
+        assert!(user_cfg.profiles.contains_key("myagent"));
+    }
 }

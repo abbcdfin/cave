@@ -95,3 +95,13 @@ Decided 2026-09-17.
 - **Boundary tests first.** The Scope boundary is written as executable tests before the skeleton is built; passing them is its exit criterion.
 - **Profiles instead of presets.** Per-agent support is profile data on the Phase 2 engine rather than a separate presets phase.
 - **Dogfood before widening** (decided 2026-10-22): Phase 3 adds the `agy` profile first, so cave's own development runs under cave, then the user config file, then the remaining profiles. Running the tool on itself exposes profile gaps faster than adding profiles for agents not in daily use, and the config file lands second so later profiles can be validated by editing a file instead of rebuilding.
+
+## Packaging & Distribution
+
+Decided 2026-10-23 at Phase 4 Decision Check Point:
+- **Package Format**: Arch Linux VCS package (`cave-git`) selected over a static release package. At this stage, `cave` has no published release tags on GitHub; a VCS package tracks `main` dynamically via `pkgver()` (using `git describe` with commit count/hash fallback), allowing Arch Linux users to build and update immediately from source. Once stable semantic version tags are published, a companion `cave` release package using source tarballs and static checksums can be added alongside `cave-git`.
+- **Placement**: Dedicated `packaging/arch/PKGBUILD` to isolate packaging metadata from core application code.
+- **Dependencies**: Runtime dependency on `bubblewrap` (`bwrap`); build dependencies on `cargo` and `git`.
+- **System Installation**: Installs binary to `/usr/bin/cave`, documentation to `/usr/share/doc/cave/README.md`, example configuration template to `/usr/share/doc/cave/profiles.toml.example`, and license to `/usr/share/licenses/cave/LICENSE`.
+- **Clean Chroot Builds**: `build()` compiles only the executable (`--bin cave`), avoiding compilation of test binaries in release mode. `check()` executes unit tests (`cargo test --lib --bins`) to ensure test coverage without requiring unprivileged user namespace capabilities that are blocked in clean chroot build environments (e.g. `extra-x86_64-build`).
+
