@@ -131,8 +131,8 @@ impl HermeticFixture {
             .current_dir(&self.working_dir)
             .env("HOME", &self.fake_home)
             .env_remove("XDG_CONFIG_HOME")
+            .env_remove("SSH_AUTH_SOCK")
             .env("TEST_HOST_VAR", "preserved_value")
-            .env("SSH_AUTH_SOCK", "/tmp/fake_ssh_auth_sock")
             .env("DBUS_SESSION_BUS_ADDRESS", "unix:path=/tmp/fake_dbus");
 
         cmd.output().expect("Failed to execute cave binary")
@@ -686,6 +686,201 @@ fn test_real_aider_version_execution() {
             );
         }
     }
+}
+
+struct AgentChildGuard {
+    child: std::process::Child,
+}
+
+impl Drop for AgentChildGuard {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+#[test]
+fn test_ssh_agent_forwarding_and_isolation() {
+    // 1. Verify required host tools
+    for tool in &["ssh-agent", "ssh-keygen", "ssh-add"] {
+        let res = Command::new("which").arg(tool).output();
+        if res.is_err() || !res.unwrap().status.success() {
+            println!("{tool} not found on PATH, skipping test_ssh_agent_forwarding_and_isolation");
+            return;
+        }
+    }
+
+    let temp_dir = tempfile::tempdir().expect("Failed to create tempdir");
+    let root = temp_dir.path();
+    let agent_sock = root.join("agent.sock");
+    let test_home = root.join("test_home");
+    let working_dir = root.join("working_dir");
+
+    fs::create_dir_all(test_home.join(".ssh")).unwrap();
+    fs::create_dir_all(&working_dir).unwrap();
+
+    fs::write(test_home.join(".ssh").join("config"), "# host ssh config\n").unwrap();
+    fs::write(test_home.join(".ssh").join("known_hosts"), "# host known hosts\n").unwrap();
+
+    // Generate throwaway ed25519 key
+    let key_file = test_home.join(".ssh").join("id_ed25519");
+    let keygen_out = Command::new("ssh-keygen")
+        .args(["-t", "ed25519", "-N", "", "-f"])
+        .arg(&key_file)
+        .args(["-C", "cave-test-key"])
+        .output()
+        .expect("Failed to run ssh-keygen");
+    assert!(keygen_out.status.success(), "ssh-keygen failed: {}", String::from_utf8_lossy(&keygen_out.stderr));
+
+    // Start ephemeral ssh-agent
+    let agent_child = Command::new("ssh-agent")
+        .args(["-D", "-a"])
+        .arg(&agent_sock)
+        .spawn()
+        .expect("Failed to spawn ssh-agent");
+    let _agent_guard = AgentChildGuard { child: agent_child };
+
+    // Wait for agent socket to appear
+    let mut ready = false;
+    for _ in 0..50 {
+        if agent_sock.exists() {
+            ready = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(ready, "ssh-agent socket failed to appear at {}", agent_sock.display());
+
+    // Add key to agent
+    let add_out = Command::new("ssh-add")
+        .env("SSH_AUTH_SOCK", &agent_sock)
+        .arg(&key_file)
+        .output()
+        .expect("Failed to run ssh-add");
+    assert!(add_out.status.success(), "ssh-add failed: {}", String::from_utf8_lossy(&add_out.stderr));
+
+    let cave_bin = env!("CARGO_BIN_EXE_cave");
+
+    // Case 1: Forwarded agent inside cave shows key fingerprint, private key is hidden, config/known_hosts are RO
+    let test_script = r#"
+        set -eu
+        # 1. ssh-add -l inside cave lists key with comment
+        ssh-add -l > /tmp/keys.txt
+        grep "cave-test-key" /tmp/keys.txt
+
+        # 2. Private key ~/.ssh/id_ed25519 is strictly hidden
+        if [ -e "$HOME/.ssh/id_ed25519" ]; then
+            echo "LEAK: private key is visible inside sandbox!"
+            exit 1
+        fi
+
+        # 3. ~/.ssh/config and known_hosts are visible and read-only
+        if [ ! -f "$HOME/.ssh/config" ]; then
+            echo "FAIL: ~/.ssh/config is missing"
+            exit 1
+        fi
+        if touch "$HOME/.ssh/config" 2>/dev/null; then
+            echo "FAIL: ~/.ssh/config was writable"
+            exit 1
+        fi
+
+        if [ ! -f "$HOME/.ssh/known_hosts" ]; then
+            echo "FAIL: ~/.ssh/known_hosts is missing"
+            exit 1
+        fi
+        if touch "$HOME/.ssh/known_hosts" 2>/dev/null; then
+            echo "FAIL: ~/.ssh/known_hosts was writable"
+            exit 1
+        fi
+
+        # 5. ssh configuration parses cleanly inside sandbox (verifies /etc/ssh/ssh_config.d tmpfs masking)
+        ssh -G localhost > /dev/null
+
+        echo "__SENTINEL_DONE__"
+    "#;
+
+    let out1 = Command::new(cave_bin)
+        .arg("sh")
+        .arg("-c")
+        .arg(test_script)
+        .current_dir(&working_dir)
+        .env("HOME", &test_home)
+        .env("SSH_AUTH_SOCK", &agent_sock)
+        .env_remove("XDG_CONFIG_HOME")
+        .output()
+        .expect("Failed to execute cave");
+
+    assert!(
+        out1.status.success(),
+        "Case 1 failed: status={:?}\nstdout: {}\nstderr: {}",
+        out1.status,
+        String::from_utf8_lossy(&out1.stdout),
+        String::from_utf8_lossy(&out1.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out1.stdout).contains("__SENTINEL_DONE__"));
+
+    // Case 2: --no-ssh flag disables agent forwarding; ssh-add -l exits 2
+    let out2 = Command::new(cave_bin)
+        .arg("--no-ssh")
+        .arg("sh")
+        .arg("-c")
+        .arg("ssh-add -l")
+        .current_dir(&working_dir)
+        .env("HOME", &test_home)
+        .env("SSH_AUTH_SOCK", &agent_sock)
+        .env_remove("XDG_CONFIG_HOME")
+        .output()
+        .expect("Failed to execute cave");
+
+    assert_eq!(
+        out2.status.code(),
+        Some(2),
+        "Expected ssh-add -l to exit 2 with --no-ssh, got {:?}\nstdout: {}\nstderr: {}",
+        out2.status.code(),
+        String::from_utf8_lossy(&out2.stdout),
+        String::from_utf8_lossy(&out2.stderr)
+    );
+
+    // Case 3: Stale socket (missing file) warns on stderr and ssh-add -l exits 2
+    let stale_path = root.join("missing.sock");
+    let out3 = Command::new(cave_bin)
+        .arg("sh")
+        .arg("-c")
+        .arg("ssh-add -l")
+        .current_dir(&working_dir)
+        .env("HOME", &test_home)
+        .env("SSH_AUTH_SOCK", &stale_path)
+        .env_remove("XDG_CONFIG_HOME")
+        .output()
+        .expect("Failed to execute cave");
+
+    assert_eq!(out3.status.code(), Some(2));
+    let stderr3 = String::from_utf8_lossy(&out3.stderr);
+    assert!(
+        stderr3.contains("Warning: SSH_AUTH_SOCK points to a missing socket; ssh-agent not forwarded."),
+        "Expected stale socket warning, got: {stderr3}"
+    );
+
+    // Case 4: Stale socket (regular file, not a socket) warns on stderr and ssh-add -l exits 2
+    let regular_file = root.join("not_a_socket.txt");
+    fs::write(&regular_file, "plain file").unwrap();
+    let out4 = Command::new(cave_bin)
+        .arg("sh")
+        .arg("-c")
+        .arg("ssh-add -l")
+        .current_dir(&working_dir)
+        .env("HOME", &test_home)
+        .env("SSH_AUTH_SOCK", &regular_file)
+        .env_remove("XDG_CONFIG_HOME")
+        .output()
+        .expect("Failed to execute cave");
+
+    assert_eq!(out4.status.code(), Some(2));
+    let stderr4 = String::from_utf8_lossy(&out4.stderr);
+    assert!(
+        stderr4.contains("Warning: SSH_AUTH_SOCK points to a missing socket; ssh-agent not forwarded."),
+        "Expected stale socket warning for regular file, got: {stderr4}"
+    );
 }
 
 

@@ -16,7 +16,9 @@ ro_home = [
     ".cargo/bin",
     ".rustup",
     ".gitconfig",
-    ".local/share/uv"
+    ".local/share/uv",
+    ".ssh/config",
+    ".ssh/known_hosts"
 ]
 rw_cache = [
     ".cache",
@@ -27,7 +29,8 @@ rw_cache = [
 tmpfs = [
     "/tmp",
     "/run",
-    "/var/tmp"
+    "/var/tmp",
+    "/etc/ssh/ssh_config.d"
 ]
 
 [profiles.claude]

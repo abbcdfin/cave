@@ -65,6 +65,7 @@ cave options must come before the agent command; everything from the agent comma
 | :--- | :--- |
 | `cave claude --dangerously-skip-permissions` | Runs Claude Code in YOLO mode, sandboxed to the CWD |
 | `cave <agent>` | Runs the specified agent command inside the isolated environment |
+| `cave --no-ssh <agent>` | Disables forwarding the host SSH agent socket for this session |
 | `cave --dir ../shared-lib claude` | Also allows read-write access to `../shared-lib` |
 | `cave --ro-dir ~/reference claude` | Also allows read-only access to `~/reference` |
 | `cave --doctor` | Inspects sandbox backend availability and permissions |
@@ -72,6 +73,17 @@ cave options must come before the agent command; everything from the agent comma
 ## Configuration
 
 `cave` works out of the box with embedded profiles for supported agents (`claude`, `agy`, `aider`, `sh`, `bash`, `zsh`).
+
+### SSH Agent Forwarding
+
+`cave` forwards the host's `ssh-agent` socket by default to enable git operations over SSH without disclosing private credentials:
+
+- **Socket Forwarding**: Bound read-only at `/run/user/$UID/ssh-agent.sock` within a private runtime directory (`0700`).
+- **Credential Isolation**: Private keys (`~/.ssh/id_*`) remain strictly hidden and are never mounted into the sandbox.
+- **Config & Known Hosts**: `~/.ssh/config` and `~/.ssh/known_hosts` are mounted read-only by default when present on the host.
+- **Host Drop-ins (`/etc/ssh/ssh_config.d`)**: System drop-in directories are masked with an empty tmpfs so OpenSSH does not reject host root-owned files (which appear as `nobody` inside unprivileged user namespaces). Host-wide custom SSH configurations belong in `~/.ssh/config`.
+- **Opt-out**: Pass `--no-ssh` before the agent command (`cave --no-ssh <agent>`) to disable forwarding for that session.
+- **Stale Sockets**: If `SSH_AUTH_SOCK` points to a missing or non-socket path, `cave` emits a warning to stderr and unsets the variable inside the sandbox without failing the session.
 
 To customize mount paths or define new agent profiles, create a configuration file at:
 `~/.config/cave/profiles.toml` (or `${XDG_CONFIG_HOME:-$HOME/.config}/cave/profiles.toml`)

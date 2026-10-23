@@ -22,7 +22,7 @@ impl std::fmt::Display for BwrapError {
 impl std::error::Error for BwrapError {}
 
 pub fn check_bwrap_available() -> Result<PathBuf, BwrapError> {
-    if let Ok(path) = which_bwrap() {
+    if let Some(path) = which_binary("bwrap") {
         Ok(path)
     } else {
         Err(BwrapError::NotFound(
@@ -31,19 +31,20 @@ pub fn check_bwrap_available() -> Result<PathBuf, BwrapError> {
     }
 }
 
-fn which_bwrap() -> Result<PathBuf, ()> {
+pub fn which_binary(bin: &str) -> Option<PathBuf> {
     if let Ok(path_var) = std::env::var("PATH") {
         for dir in path_var.split(':') {
-            let candidate = PathBuf::from(dir).join("bwrap");
+            let candidate = PathBuf::from(dir).join(bin);
             if candidate.is_file() {
-                return Ok(candidate);
+                return Some(candidate);
             }
         }
     }
-    if Path::new("/usr/bin/bwrap").is_file() {
-        return Ok(PathBuf::from("/usr/bin/bwrap"));
+    let std_bin = PathBuf::from("/usr/bin").join(bin);
+    if std_bin.is_file() {
+        return Some(std_bin);
     }
-    Err(())
+    None
 }
 
 pub fn render_args(plan: &MountPlan, agent_cmd: &std::ffi::OsStr, agent_args: &[OsString]) -> Vec<OsString> {

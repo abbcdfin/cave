@@ -1,20 +1,16 @@
 # Checkpoint
 
 ## Current State
-- Phase 4 (Arch Linux Packaging & Distribution) remediated, completed, and collapsed into `plan.md`:
-  - Created `packaging/arch/PKGBUILD` for `cave-git` (VCS package for Arch Linux / AUR).
-  - Runtime dependency on `bubblewrap`, build dependencies on `cargo` and `git`.
-  - Added MIT `LICENSE` to root and enhanced `Cargo.toml` package metadata (license, description, repository, homepage, readme).
-  - Reconciled `README.md`: accurate installation semantics (git branch build vs local cargo testing), clarified default `~/.config` inheritance isolation, and removed privileged `.npmrc` from config examples.
-  - Recorded detailed packaging rationale in `docs/architecture_design.md` (clean chroot builds, unit test check isolation, -git package vs release tarball).
-  - Committed and pushed changes (`ebfbc20`) to `origin/main` on GitHub.
-  - Rebuilt package from GitHub source with `makepkg`: produced `cave-git-0.1.0.r18.gebfbc20-1-x86_64.pkg.tar.zst`.
-  - Verified archive contents with `tar -tf`: contains `/usr/bin/cave`, documentation, license, and `/usr/share/doc/cave/profiles.toml.example`.
-- Test suite passing: 18 unit tests, 19 boundary tests (37 total, 0 clippy warnings).
-- All planned roadmap phases in `vdesign/plan.md` (Phases 1-4) are complete.
+- Phase 5 (SSH via the host ssh-agent) complete and collapsed into `vdesign/plan.md`:
+  - Host `ssh-agent` socket forwarded RO to `/run/user/$UID/ssh-agent.sock` (`0700` runtime directory permissions), `.ssh/config` and `.ssh/known_hosts` mounted RO, private keys (`~/.ssh/id_*`) hidden.
+  - `/etc/ssh/ssh_config.d` masked with a private `tmpfs` (`defaults.tmpfs` skips missing host paths via `p.exists()`), resolving OpenSSH `nobody`-owned drop-in rejection in rootless user namespaces.
+  - Single `policy::resolve_ssh_socket` used by `main.rs` and `--doctor`; `no_ssh` handled in `main.rs` only; `build_mount_plan` reads no config and no environment (it stats and canonicalizes paths on disk).
+  - `--doctor` verifies both `ssh -G github.com` and `ssh-add -l` inside a test sandbox.
+  - Live `ssh -T git@github.com`, `git ls-remote`, and scratch branch push/delete over SSH verified and confirmed.
+  - 25 unit tests and 20 boundary tests passing (45 total), 0 clippy warnings.
+- Phases 1–5 complete.
 
 ## Next Steps
-- Build Phase 5 (SSH via the host ssh-agent) from the accepted board in `vdesign/active_plan.md`, starting with 5.1.
-- Optionally submit/publish `cave-git` to the Arch User Repository (AUR).
-- Review and dogfood `cave` across daily workflows (`claude`, `agy`, `aider`).
-- Evaluate candidate backlog in `vdesign/plan.md` for subsequent phases (e.g. generic CLI fallback profile, network policy filtering, ephemeral git branch / copy-on-write snapshotting, opt-in Docker access).
+- Optional host housekeeping: move `ServerAliveInterval 120` from `/etc/ssh/ssh_config.d/50-general-client.conf` into `~/.ssh/config` if desired inside `cave`.
+- Publish `cave-git` to the AUR.
+- Evaluate candidates in `vdesign/plan.md` when ready for Phase 6.

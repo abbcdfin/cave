@@ -22,6 +22,7 @@ pub struct RunOptions {
     pub extra_dirs: Vec<ExtraDir>,
     pub agent_cmd: OsString,
     pub agent_args: Vec<OsString>,
+    pub no_ssh: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -61,6 +62,7 @@ where
 {
     let mut iter = args.into_iter().map(Into::into);
     let mut extra_dirs = Vec::new();
+    let mut no_ssh = false;
 
     while let Some(arg) = iter.next() {
         let s = arg.to_str();
@@ -68,6 +70,7 @@ where
             Some("--help") | Some("-h") => return Ok(CliCommand::Help),
             Some("--version") | Some("-V") => return Ok(CliCommand::Version),
             Some("--doctor") => return Ok(CliCommand::Doctor),
+            Some("--no-ssh") => no_ssh = true,
             Some("--dir") => {
                 let val = iter
                     .next()
@@ -95,6 +98,7 @@ where
                     extra_dirs,
                     agent_cmd,
                     agent_args,
+                    no_ssh,
                 }));
             }
             Some(opt) if opt.starts_with('-') => {
@@ -108,6 +112,7 @@ where
                     extra_dirs,
                     agent_cmd,
                     agent_args,
+                    no_ssh,
                 }));
             }
         }
@@ -149,6 +154,7 @@ Usage:
 Options:
     --dir PATH       Mount PATH read-write at its host path (repeatable)
     --ro-dir PATH    Mount PATH read-only at its host path (repeatable)
+    --no-ssh         Disable forwarding the host SSH agent socket
     --doctor         Check system prerequisites and sandbox capabilities
     -h, --help       Print help information
     -V, --version    Print version information
@@ -253,8 +259,9 @@ pub fn run_doctor() -> bool {
                     std::ffi::OsString::from("-c"),
                     std::ffi::OsString::from("grep -E '^[[:space:]]*nameserver[[:space:]]+' /etc/resolv.conf"),
                 ],
+                no_ssh: false,
             };
-            let plan = crate::policy::build_mount_plan(&test_opts, home, &cwd, uid, config);
+            let plan = crate::policy::build_mount_plan(&test_opts, home, &cwd, uid, config, None);
             let bwrap_args = crate::bwrap::render_args(&plan, &test_opts.agent_cmd, &test_opts.agent_args);
             let check_output = std::process::Command::new(bwrap_bin)
                 .args(&bwrap_args)
@@ -271,8 +278,9 @@ pub fn run_doctor() -> bool {
                             std::ffi::OsString::from("-c"),
                             std::ffi::OsString::from("timeout 3 sh -c 'getent ahostsv4 anthropic.com >/dev/null 2>&1 || getent ahostsv4 dns.google >/dev/null 2>&1'"),
                         ],
+                        no_ssh: false,
                     };
-                    let ext_plan = crate::policy::build_mount_plan(&ext_opts, home, &cwd, uid, config);
+                    let ext_plan = crate::policy::build_mount_plan(&ext_opts, home, &cwd, uid, config, None);
                     let ext_args = crate::bwrap::render_args(&ext_plan, &ext_opts.agent_cmd, &ext_opts.agent_args);
                     if let Ok(ext_out) = std::process::Command::new(bwrap_bin).args(&ext_args).output() {
                         if ext_out.status.success() {
@@ -291,10 +299,112 @@ pub fn run_doctor() -> bool {
                     ok = false;
                 }
             }
+
+            // 6. Test SSH configuration and agent forwarding inside sandbox (optional, warnings only)
+            if crate::bwrap::which_binary("ssh").is_none() {
+                println!("  [WARN] ssh not found on PATH (ssh config check skipped)");
+            } else {
+                let ssh_cfg_opts = RunOptions {
+                    extra_dirs: vec![],
+                    agent_cmd: std::ffi::OsString::from("ssh"),
+                    agent_args: vec![
+                        std::ffi::OsString::from("-G"),
+                        std::ffi::OsString::from("github.com"),
+                    ],
+                    no_ssh: false,
+                };
+                let ssh_cfg_plan = crate::policy::build_mount_plan(&ssh_cfg_opts, home, &cwd, uid, config, None);
+                let ssh_cfg_args = crate::bwrap::render_args(&ssh_cfg_plan, &ssh_cfg_opts.agent_cmd, &ssh_cfg_opts.agent_args);
+                match std::process::Command::new(bwrap_bin).args(&ssh_cfg_args).output() {
+                    Ok(out) if out.status.success() => {
+                        println!("  [OK] ssh configuration parses cleanly inside sandbox");
+                    }
+                    Ok(out) => {
+                        let err_line = String::from_utf8_lossy(&out.stderr)
+                            .lines()
+                            .next()
+                            .unwrap_or("unknown error")
+                            .to_string();
+                        println!("  [WARN] ssh cannot parse its config inside the sandbox: {err_line}");
+                    }
+                    Err(e) => {
+                        println!("  [WARN] failed to run ssh -G inside sandbox: {e}");
+                    }
+                }
+            }
+
+            if crate::bwrap::which_binary("ssh-add").is_none() {
+                println!("  [WARN] ssh-add not found on PATH (SSH agent check skipped)");
+            } else {
+                match crate::policy::resolve_ssh_socket() {
+                    crate::policy::SshSocket::Unset => {
+                        println!("  [WARN] host SSH_AUTH_SOCK is unset (SSH agent forwarding not available)");
+                    }
+                    crate::policy::SshSocket::Stale(ref sock_path) => {
+                        println!(
+                            "  [WARN] host SSH_AUTH_SOCK points to a missing socket ({})",
+                            sock_path.display()
+                        );
+                    }
+                    crate::policy::SshSocket::Valid(ref sock_path) => {
+                        let ssh_opts = RunOptions {
+                            extra_dirs: vec![],
+                            agent_cmd: std::ffi::OsString::from("ssh-add"),
+                            agent_args: vec![std::ffi::OsString::from("-l")],
+                            no_ssh: false,
+                        };
+                        let ssh_plan = crate::policy::build_mount_plan(
+                            &ssh_opts,
+                            home,
+                            &cwd,
+                            uid,
+                            config,
+                            Some(sock_path),
+                        );
+                        let ssh_args = crate::bwrap::render_args(
+                            &ssh_plan,
+                            &ssh_opts.agent_cmd,
+                            &ssh_opts.agent_args,
+                        );
+                        match std::process::Command::new(bwrap_bin).args(&ssh_args).output() {
+                            Ok(out) => match out.status.code() {
+                                Some(0) => {
+                                    let out_str = String::from_utf8_lossy(&out.stdout);
+                                    let count = out_str.lines().filter(|l| !l.trim().is_empty()).count();
+                                    println!(
+                                        "  [OK] SSH agent forwarded into sandbox ({} {} loaded)",
+                                        count,
+                                        if count == 1 { "key" } else { "keys" }
+                                    );
+                                }
+                                Some(1) => {
+                                    println!(
+                                        "  [WARN] SSH agent forwarded into sandbox, but no keys are loaded"
+                                    );
+                                }
+                                Some(2) => {
+                                    println!(
+                                        "  [WARN] SSH agent connection failed inside sandbox (exit code 2)"
+                                    );
+                                }
+                                other => {
+                                    println!(
+                                        "  [WARN] SSH agent check returned unexpected exit status: {:?}",
+                                        other
+                                    );
+                                }
+                            },
+                            Err(e) => {
+                                println!("  [WARN] failed to run ssh-add inside sandbox: {e}");
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
-    // 6. Print loaded configuration sources and effective merged table
+    // 7. Print loaded configuration sources and effective merged table
     println!();
     if let Some(ref config) = effective_config {
         println!("Loaded configuration sources:");
@@ -362,6 +472,37 @@ mod tests {
                 );
                 assert_eq!(opts.agent_cmd, OsString::from("claude"));
                 assert_eq!(opts.agent_args, vec![OsString::from("--flag")]);
+                assert!(!opts.no_ssh);
+            }
+            _ => panic!("Expected CliCommand::Run"),
+        }
+    }
+
+    #[test]
+    fn test_parse_args_no_ssh() {
+        let args = ["--no-ssh", "claude"];
+        let cmd = parse_args(args).unwrap();
+        match cmd {
+            CliCommand::Run(opts) => {
+                assert_eq!(opts.agent_cmd, OsString::from("claude"));
+                assert!(opts.no_ssh);
+            }
+            _ => panic!("Expected CliCommand::Run"),
+        }
+    }
+
+    #[test]
+    fn test_parse_args_no_ssh_after_agent() {
+        let args = ["git", "commit", "--no-ssh"];
+        let cmd = parse_args(args).unwrap();
+        match cmd {
+            CliCommand::Run(opts) => {
+                assert_eq!(opts.agent_cmd, OsString::from("git"));
+                assert_eq!(
+                    opts.agent_args,
+                    vec![OsString::from("commit"), OsString::from("--no-ssh")]
+                );
+                assert!(!opts.no_ssh);
             }
             _ => panic!("Expected CliCommand::Run"),
         }

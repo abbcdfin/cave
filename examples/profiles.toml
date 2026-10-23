@@ -17,7 +17,7 @@ ro_system = [
 ]
 
 # Additional files or directories under host $HOME to mount read-only
-# (Built-in defaults include .local/bin, .cargo/bin, .rustup, .gitconfig, .local/share/uv)
+# (Built-in defaults include .local/bin, .cargo/bin, .rustup, .gitconfig, .local/share/uv, .ssh/config, .ssh/known_hosts)
 ro_home = [
     # ".npmrc",
     # ".config/git",

@@ -213,13 +213,50 @@ pub fn prepare_host_state(agent_cmd: &OsStr, home_dir: &Path, config: &ConfigDat
     Ok(())
 }
 
-/// Pure policy function: builds ordered mount plan without mutating the host filesystem or reading disk.
+pub fn is_socket(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::FileTypeExt;
+        fs::metadata(path)
+            .map(|m| m.file_type().is_socket())
+            .unwrap_or(false)
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum SshSocket {
+    Unset,
+    Stale(PathBuf),
+    Valid(PathBuf),
+}
+
+pub fn resolve_ssh_socket() -> SshSocket {
+    match std::env::var_os("SSH_AUTH_SOCK") {
+        None => SshSocket::Unset,
+        Some(val) if val.is_empty() => SshSocket::Unset,
+        Some(val) => {
+            let path = PathBuf::from(val);
+            if path.exists() && is_socket(&path) {
+                SshSocket::Valid(path)
+            } else {
+                SshSocket::Stale(path)
+            }
+        }
+    }
+}
+
+/// Pure policy function: builds ordered mount plan without mutating the host filesystem or reading environment/config.
 pub fn build_mount_plan(
     options: &RunOptions,
     home_dir: &Path,
     cwd: &Path,
     uid: u32,
     config: &ConfigData,
+    ssh_socket: Option<&Path>,
 ) -> MountPlan {
     let mut mounts = Vec::new();
 
@@ -247,12 +284,24 @@ pub fn build_mount_plan(
         }
     }
 
-    // 3. Private tmpfs mounts (/tmp, /run, /var/tmp)
+    // 3. Private tmpfs mounts (/tmp, /run, /var/tmp, /etc/ssh/ssh_config.d)
     for s in &config.defaults.tmpfs {
+        let p = PathBuf::from(s);
+        if p.exists() {
+            mounts.push(MountEntry {
+                host_path: None,
+                target_path: p,
+                kind: MountKind::Tmpfs,
+            });
+        }
+    }
+
+    // 3a. Forward host SSH agent socket if available into private runtime dir
+    if let Some(sock) = ssh_socket {
         mounts.push(MountEntry {
-            host_path: None,
-            target_path: PathBuf::from(s),
-            kind: MountKind::Tmpfs,
+            host_path: Some(sock.to_path_buf()),
+            target_path: PathBuf::from(format!("/run/user/{uid}/ssh-agent.sock")),
+            kind: MountKind::BindReadOnly,
         });
     }
 
@@ -373,10 +422,15 @@ pub fn build_mount_plan(
     set_env.push(("HOME".to_string(), home_dir.display().to_string()));
     set_env.push(("XDG_RUNTIME_DIR".to_string(), format!("/run/user/{uid}")));
 
-    let unset_env = vec![
-        "SSH_AUTH_SOCK".to_string(),
+    let mut unset_env = vec![
         "DBUS_SESSION_BUS_ADDRESS".to_string(),
     ];
+
+    if ssh_socket.is_some() {
+        set_env.push(("SSH_AUTH_SOCK".to_string(), format!("/run/user/{uid}/ssh-agent.sock")));
+    } else {
+        unset_env.push("SSH_AUTH_SOCK".to_string());
+    }
 
     MountPlan {
         mounts,
@@ -436,11 +490,12 @@ mod tests {
             extra_dirs: vec![],
             agent_cmd: OsString::from("claude"),
             agent_args: vec![],
+            no_ssh: false,
         };
 
         let config = load_config();
         // Calling build_mount_plan does not create missing files on host
-        let _plan = build_mount_plan(&opts, &home, &cwd, 1000, &config);
+        let _plan = build_mount_plan(&opts, &home, &cwd, 1000, &config, None);
         assert!(!home.join(".claude").exists());
         assert!(!home.join(".claude.json").exists());
     }
@@ -461,10 +516,11 @@ mod tests {
             ],
             agent_cmd: OsString::from("sh"),
             agent_args: vec![],
+            no_ssh: false,
         };
 
         let config = load_config();
-        let plan = build_mount_plan(&opts, &home, &cwd, 1000, &config);
+        let plan = build_mount_plan(&opts, &home, &cwd, 1000, &config, None);
 
         let canonical_cwd = fs::canonicalize(&cwd).unwrap();
         let canonical_sub = fs::canonicalize(&sub).unwrap();
@@ -586,10 +642,11 @@ mod tests {
             extra_dirs: vec![],
             agent_cmd: OsString::from("test_agent"),
             agent_args: vec![],
+            no_ssh: false,
         };
 
         let config = load_effective_config(home).expect("effective config loads");
-        let plan = build_mount_plan(&opts, home, &cwd, 1000, &config);
+        let plan = build_mount_plan(&opts, home, &cwd, 1000, &config, None);
 
         let mut state_idx = None;
         let mut runtime_idx = None;
@@ -609,6 +666,140 @@ mod tests {
             state_idx.unwrap() < runtime_idx.unwrap(),
             "State (RW) must be mounted before Runtime (RO) so subpaths can be read-only"
         );
+    }
+
+    #[test]
+    fn test_ssh_defaults_in_profiles_toml() {
+        let config = load_config();
+        assert!(config.defaults.ro_home.contains(&".ssh/config".to_string()));
+        assert!(config.defaults.ro_home.contains(&".ssh/known_hosts".to_string()));
+    }
+
+    #[test]
+    fn test_build_mount_plan_with_ssh_socket() {
+        let dir = tempdir().unwrap();
+        let home = dir.path().join("home");
+        let cwd = dir.path().join("project");
+        let sock = dir.path().join("fake_agent.sock");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(&cwd).unwrap();
+
+        let opts = RunOptions {
+            extra_dirs: vec![],
+            agent_cmd: OsString::from("claude"),
+            agent_args: vec![],
+            no_ssh: false,
+        };
+
+        let config = load_config();
+        let plan = build_mount_plan(&opts, &home, &cwd, 1000, &config, Some(&sock));
+
+        // 1. Target mount at /run/user/1000/ssh-agent.sock exists with BindReadOnly
+        let target_sock = PathBuf::from("/run/user/1000/ssh-agent.sock");
+        let sock_mount_idx = plan
+            .mounts
+            .iter()
+            .position(|m| m.target_path == target_sock && m.kind == MountKind::BindReadOnly)
+            .expect("SSH socket bind mount must exist");
+
+        assert_eq!(plan.mounts[sock_mount_idx].host_path, Some(sock.clone()));
+
+        // 2. Mounted after /run tmpfs
+        let run_tmpfs_idx = plan
+            .mounts
+            .iter()
+            .position(|m| m.target_path == Path::new("/run") && m.kind == MountKind::Tmpfs)
+            .expect("/run tmpfs must exist");
+        assert!(
+            sock_mount_idx > run_tmpfs_idx,
+            "SSH socket mount ({sock_mount_idx}) must come after /run tmpfs ({run_tmpfs_idx})"
+        );
+
+        // 3. Environment: SSH_AUTH_SOCK is in set_env and not in unset_env
+        assert!(plan.set_env.contains(&(
+            "SSH_AUTH_SOCK".to_string(),
+            "/run/user/1000/ssh-agent.sock".to_string()
+        )));
+        assert!(!plan.unset_env.contains(&"SSH_AUTH_SOCK".to_string()));
+    }
+
+    #[test]
+    fn test_build_mount_plan_without_ssh_socket() {
+        let dir = tempdir().unwrap();
+        let home = dir.path().join("home");
+        let cwd = dir.path().join("project");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(&cwd).unwrap();
+
+        let opts = RunOptions {
+            extra_dirs: vec![],
+            agent_cmd: OsString::from("claude"),
+            agent_args: vec![],
+            no_ssh: false,
+        };
+
+        let config = load_config();
+        let plan = build_mount_plan(&opts, &home, &cwd, 1000, &config, None);
+
+        let target_sock = PathBuf::from("/run/user/1000/ssh-agent.sock");
+        assert!(!plan.mounts.iter().any(|m| m.target_path == target_sock));
+        assert!(!plan.set_env.iter().any(|(k, _)| k == "SSH_AUTH_SOCK"));
+        assert!(plan.unset_env.contains(&"SSH_AUTH_SOCK".to_string()));
+    }
+
+    #[test]
+    fn test_build_mount_plan_with_no_ssh_flag() {
+        let dir = tempdir().unwrap();
+        let home = dir.path().join("home");
+        let cwd = dir.path().join("project");
+        let sock = dir.path().join("fake_agent.sock");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(&cwd).unwrap();
+
+        let opts = RunOptions {
+            extra_dirs: vec![],
+            agent_cmd: OsString::from("claude"),
+            agent_args: vec![],
+            no_ssh: true,
+        };
+
+        let config = load_config();
+        // Caller (main.rs) passes None when no_ssh is true
+        let ssh_socket = if opts.no_ssh { None } else { Some(sock.as_path()) };
+        let plan = build_mount_plan(&opts, &home, &cwd, 1000, &config, ssh_socket);
+
+        // When no_ssh is true, socket is NOT mounted and SSH_AUTH_SOCK is unset
+        let target_sock = PathBuf::from("/run/user/1000/ssh-agent.sock");
+        assert!(!plan.mounts.iter().any(|m| m.target_path == target_sock));
+        assert!(!plan.set_env.iter().any(|(k, _)| k == "SSH_AUTH_SOCK"));
+        assert!(plan.unset_env.contains(&"SSH_AUTH_SOCK".to_string()));
+    }
+
+    #[test]
+    fn test_tmpfs_skips_missing_host_paths() {
+        let dir = tempdir().unwrap();
+        let home = dir.path().join("home");
+        let cwd = dir.path().join("project");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(&cwd).unwrap();
+
+        let opts = RunOptions {
+            extra_dirs: vec![],
+            agent_cmd: OsString::from("claude"),
+            agent_args: vec![],
+            no_ssh: false,
+        };
+
+        let mut config = load_config();
+        let missing_path = "/nonexistent/test_tmpfs_dir_abc123";
+        config.defaults.tmpfs.push(missing_path.to_string());
+
+        let plan = build_mount_plan(&opts, &home, &cwd, 1000, &config, None);
+
+        // Standard /tmp exists and is mounted
+        assert!(plan.mounts.iter().any(|m| m.target_path == Path::new("/tmp") && m.kind == MountKind::Tmpfs));
+        // Missing tmpfs path is skipped
+        assert!(!plan.mounts.iter().any(|m| m.target_path == Path::new(missing_path)));
     }
 
     #[test]

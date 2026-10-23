@@ -2,6 +2,7 @@ use cave::bwrap::{check_bwrap_available, exec_bwrap, render_args};
 use cave::cli::{parse_args, print_help, print_version, run_doctor, CliCommand};
 use cave::policy::{
     agent_basename, build_mount_plan, load_effective_config, prepare_host_state,
+    resolve_ssh_socket, SshSocket,
 };
 use std::env;
 use std::path::PathBuf;
@@ -77,6 +78,22 @@ fn main() -> ExitCode {
                 );
             }
 
+            // Resolve host SSH agent socket if available and not disabled via --no-ssh
+            let ssh_socket = if opts.no_ssh {
+                None
+            } else {
+                match resolve_ssh_socket() {
+                    SshSocket::Valid(p) => Some(p),
+                    SshSocket::Stale(_) => {
+                        eprintln!(
+                            "Warning: SSH_AUTH_SOCK points to a missing socket; ssh-agent not forwarded."
+                        );
+                        None
+                    }
+                    SshSocket::Unset => None,
+                }
+            };
+
             // Explicit host side-effect: prepare declared state directories/files
             if let Err(e) = prepare_host_state(&opts.agent_cmd, &home, &config) {
                 eprintln!("Error: failed to prepare host state paths: {e}");
@@ -84,7 +101,7 @@ fn main() -> ExitCode {
             }
 
             // Pure policy evaluation: build mount and environment plan
-            let plan = build_mount_plan(&opts, &home, &cwd, uid, &config);
+            let plan = build_mount_plan(&opts, &home, &cwd, uid, &config, ssh_socket.as_deref());
             let bwrap_args = render_args(&plan, &opts.agent_cmd, &opts.agent_args);
 
             let err = exec_bwrap(&bwrap_bin, &bwrap_args);
