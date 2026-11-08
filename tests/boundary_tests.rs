@@ -883,5 +883,158 @@ fn test_ssh_agent_forwarding_and_isolation() {
     );
 }
 
+#[test]
+fn test_toolchain_flutter_boundary_and_isolation() {
+    let fixture = HermeticFixture::new();
+    let cave_bin = env!("CARGO_BIN_EXE_cave");
+    let test_home = &fixture.fake_home;
+    let working_dir = &fixture.working_dir;
+
+    // Set up sensitive files in fake home that must remain hidden
+    let gradle_dir = test_home.join(".gradle");
+    fs::create_dir_all(&gradle_dir).unwrap();
+    fs::write(gradle_dir.join("gradle.properties"), "SECRET_SIGNING_PASSWORD=12345\n").unwrap();
+
+    let android_dir = test_home.join(".android");
+    fs::create_dir_all(&android_dir).unwrap();
+    fs::write(android_dir.join("adbkey"), "PRIVATE_ADB_KEY\n").unwrap();
+
+    // Set up a runtime file (e.g. .config/flutter) and .android/debug.keystore
+    let config_flutter = test_home.join(".config").join("flutter");
+    fs::create_dir_all(&config_flutter).unwrap();
+    fs::write(config_flutter.join("settings"), "test-settings\n").unwrap();
+    fs::write(android_dir.join("debug.keystore"), "FAKE_KEYSTORE\n").unwrap();
+
+    // Set up a fake Flutter SDK outside HOME
+    let sdk_dir = fixture._temp_dir.path().join("fake_flutter_sdk");
+    let sdk_bin = sdk_dir.join("bin");
+    fs::create_dir_all(&sdk_bin).unwrap();
+    let real_flutter = sdk_bin.join("flutter");
+    fs::write(&real_flutter, "#!/bin/sh\nexit 0\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&real_flutter).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&real_flutter, perms).unwrap();
+    }
+
+    // Reach flutter through a symlink on PATH
+    let symlink_bin_dir = fixture._temp_dir.path().join("path_bin");
+    fs::create_dir_all(&symlink_bin_dir).unwrap();
+    let flutter_symlink = symlink_bin_dir.join("flutter");
+    symlink(&real_flutter, &flutter_symlink).unwrap();
+
+    let test_path = format!("{}:{}", symlink_bin_dir.display(), std::env::var("PATH").unwrap_or_default());
+
+    // Case 1: Active toolchain --with flutter
+    // - SDK is writable
+    // - runtime entry (.config/flutter) is read-only
+    // - ~/.gradle/gradle.properties and ~/.android/adbkey are NOT visible
+    let test_script = r#"
+        # 1. Check SDK is writable (touching a file in the SDK succeeds)
+        touch "$SDK_DIR/can_write.txt"
+        if [ ! -f "$SDK_DIR/can_write.txt" ]; then
+            echo "Failure: SDK directory is not writable"
+            exit 1
+        fi
+
+        # 2. Check runtime entry is read-only (touching file under .config/flutter fails)
+        if touch "$HOME/.config/flutter/fail_write.txt" 2>/dev/null; then
+            echo "Failure: .config/flutter was writable, expected read-only"
+            exit 1
+        fi
+
+        # 3. Check .gradle/gradle.properties is not visible
+        if [ -e "$HOME/.gradle/gradle.properties" ]; then
+            echo "Failure: .gradle/gradle.properties is visible"
+            exit 1
+        fi
+
+        # 4. Check .android/adbkey is not visible
+        if [ -e "$HOME/.android/adbkey" ]; then
+            echo "Failure: .android/adbkey is visible"
+            exit 1
+        fi
+
+        # But .android/debug.keystore IS visible and read-only
+        if [ ! -f "$HOME/.android/debug.keystore" ]; then
+            echo "Failure: .android/debug.keystore should be mounted"
+            exit 1
+        fi
+        if touch "$HOME/.android/debug.keystore" 2>/dev/null; then
+            echo "Failure: .android/debug.keystore was writable, expected read-only"
+            exit 1
+        fi
+
+        echo "__SENTINEL_DONE__"
+    "#;
+
+    let out1 = Command::new(cave_bin)
+        .arg("--with")
+        .arg("flutter")
+        .arg("sh")
+        .arg("-c")
+        .arg(format!("SDK_DIR='{}' {}", sdk_dir.display(), test_script))
+        .current_dir(working_dir)
+        .env("HOME", test_home)
+        .env("PATH", &test_path)
+        .env_remove("XDG_CONFIG_HOME")
+        .output()
+        .expect("Failed to execute cave");
+
+    assert!(
+        out1.status.success(),
+        "Case 1 failed: status={:?}\nstdout: {}\nstderr: {}",
+        out1.status,
+        String::from_utf8_lossy(&out1.stdout),
+        String::from_utf8_lossy(&out1.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out1.stdout).contains("__SENTINEL_DONE__"));
+
+    // Case 2: Missing flutter exits 1 naming the entry
+    let clean_path = "/usr/bin:/bin";
+    let out2 = Command::new(cave_bin)
+        .arg("--with")
+        .arg("flutter")
+        .arg("sh")
+        .arg("-c")
+        .arg("true")
+        .current_dir(working_dir)
+        .env("HOME", test_home)
+        .env("PATH", clean_path)
+        .env_remove("XDG_CONFIG_HOME")
+        .output()
+        .expect("Failed to execute cave");
+
+    assert_eq!(out2.status.code(), Some(1));
+    let stderr2 = String::from_utf8_lossy(&out2.stderr);
+    assert!(
+        stderr2.contains("${bin:flutter}"),
+        "Expected error naming '${{bin:flutter}}', got: {stderr2}"
+    );
+
+    // Case 3: Unknown --with name exits 1
+    let out3 = Command::new(cave_bin)
+        .arg("--with")
+        .arg("nonexistent_toolchain_xyz")
+        .arg("sh")
+        .arg("-c")
+        .arg("true")
+        .current_dir(working_dir)
+        .env("HOME", test_home)
+        .env("PATH", &test_path)
+        .env_remove("XDG_CONFIG_HOME")
+        .output()
+        .expect("Failed to execute cave");
+
+    assert_eq!(out3.status.code(), Some(1));
+    let stderr3 = String::from_utf8_lossy(&out3.stderr);
+    assert!(
+        stderr3.contains("unknown toolchain 'nonexistent_toolchain_xyz'"),
+        "Expected error naming unknown toolchain, got: {stderr3}"
+    );
+}
+
 
 

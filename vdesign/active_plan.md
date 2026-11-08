@@ -20,9 +20,9 @@ Decisions & rationale: `docs/architecture_design.md` › Toolchains, `vdesign/pr
 - [x] 6.3.3 Measure startup overhead with `--with flutter` ensuring it remains < 100 ms (measured 0.75 ms avg, 0.59 ms min).
 
 ## Slice 4: Built-in Flutter Toolchain & Boundary Tests (Plan step 4)
-- [ ] 6.4.1 Embedded `[toolchains.flutter]` in `src/profiles.toml` with `requires`, `rw_cache` (`${bin:flutter}/../..`, `.pub-cache`, `.gradle/caches`, `.gradle/wrapper`, `.dartServer`), `runtime` (`${ANDROID_HOME:-Android/Sdk}`, `.android/debug.keystore`, `.config/flutter`), and `check_tcp` for adb (127.0.0.1:5037).
-- [ ] 6.4.2 Boundary tests in `tests/boundary_tests.rs`: Fake-toolchain fixture on `PATH` verifying SDK writable, runtime read-only, `.gradle/gradle.properties` and `.android/adbkey` hidden, missing `flutter` exits 1, unknown `--with` exits 1.
-- [ ] 6.4.3 Mutation check: Temporarily disable fatal check for failed `requires`, verify boundary test catches it, and restore.
+- [x] 6.4.1 Embedded `[toolchains.flutter]` in `src/profiles.toml` with `requires`, `rw_cache` (`${bin:flutter}/../..`, `.pub-cache`, `.gradle/caches`, `.gradle/wrapper`, `.dartServer`), `runtime` (`${ANDROID_HOME:-Android/Sdk}`, `.android/debug.keystore`, `.config/flutter`), and `check_tcp` for adb (127.0.0.1:5037).
+- [x] 6.4.2 Boundary tests in `tests/boundary_tests.rs`: Fake-toolchain fixture on `PATH` verifying SDK writable, runtime read-only, `.gradle/gradle.properties` and `.android/adbkey` hidden, missing `flutter` exits 1, unknown `--with` exits 1.
+- [x] 6.4.3 Mutation check: Temporarily disabled fatal check for failed `requires`, verified `test_toolchain_flutter_boundary_and_isolation` failed, and restored.
 - [ ] 6.4.4 Host verification: Provide user with exact commands for host checks (`flutter doctor -v`, `flutter build apk --debug`, `flutter run`, adb warning, `ADB_REJECT_KILL_SERVER=1 adb kill-server`), and record results.
 
 ## Slice 5: Documentation & Reconciliation (Plan step 5)
