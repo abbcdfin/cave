@@ -30,10 +30,50 @@ pub struct MountPlan {
     pub uid: u32,
 }
 
+#[derive(Debug, Deserialize, Clone, Default, PartialEq, Eq)]
+pub struct TcpCheckConfig {
+    pub addr: String,
+    pub hint: String,
+}
+
+#[derive(Debug, Deserialize, Clone, Default, PartialEq, Eq)]
+pub struct ToolchainConfig {
+    #[serde(default)]
+    pub requires: Vec<String>,
+    #[serde(default)]
+    pub rw_cache: Vec<String>,
+    #[serde(default)]
+    pub runtime: Vec<String>,
+    #[serde(default)]
+    pub check_tcp: Vec<TcpCheckConfig>,
+}
+
+#[derive(Debug, Deserialize, Clone, Default, PartialEq, Eq)]
+pub struct UserToolchainConfig {
+    #[serde(default)]
+    pub requires: Vec<String>,
+    #[serde(default)]
+    pub rw_cache: Vec<String>,
+    #[serde(default)]
+    pub runtime: Vec<String>,
+    #[serde(default)]
+    pub check_tcp: Vec<TcpCheckConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedToolchain {
+    pub name: String,
+    pub rw_cache: Vec<PathBuf>,
+    pub runtime: Vec<PathBuf>,
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct ConfigData {
     pub defaults: DefaultsConfig,
+    #[serde(default)]
     pub profiles: HashMap<String, AgentProfileConfig>,
+    #[serde(default)]
+    pub toolchains: HashMap<String, ToolchainConfig>,
     #[serde(default)]
     pub sources: Vec<String>,
 }
@@ -44,6 +84,8 @@ pub struct UserConfigData {
     pub defaults: Option<UserDefaultsConfig>,
     #[serde(default)]
     pub profiles: HashMap<String, UserAgentProfileConfig>,
+    #[serde(default)]
+    pub toolchains: HashMap<String, UserToolchainConfig>,
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
@@ -181,6 +223,34 @@ pub fn merge_user_config(config: &mut ConfigData, user_config: UserConfigData) {
             }
         }
     }
+
+    for (name, user_tc) in user_config.toolchains {
+        let entry = config.toolchains.entry(name).or_default();
+        for req in user_tc.requires {
+            if !entry.requires.contains(&req) {
+                entry.requires.push(req);
+            }
+        }
+        for rw in user_tc.rw_cache {
+            // Move: if present in runtime, remove from runtime
+            entry.runtime.retain(|x| x != &rw);
+            if !entry.rw_cache.contains(&rw) {
+                entry.rw_cache.push(rw);
+            }
+        }
+        for ro in user_tc.runtime {
+            // Move: if present in rw_cache, remove from rw_cache
+            entry.rw_cache.retain(|x| x != &ro);
+            if !entry.runtime.contains(&ro) {
+                entry.runtime.push(ro);
+            }
+        }
+        for tcp in user_tc.check_tcp {
+            if !entry.check_tcp.iter().any(|x| x.addr == tcp.addr) {
+                entry.check_tcp.push(tcp);
+            }
+        }
+    }
 }
 
 pub fn agent_basename(agent_cmd: &OsStr) -> &str {
@@ -249,6 +319,44 @@ pub fn resolve_ssh_socket() -> SshSocket {
     }
 }
 
+pub fn normalize_path_lexical(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut components = Vec::new();
+    for comp in path.components() {
+        match comp {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if let Some(Component::Normal(_)) = components.last() {
+                    components.pop();
+                } else if !components.iter().any(|c| matches!(c, Component::RootDir | Component::Prefix(_))) {
+                    components.push(comp);
+                }
+            }
+            _ => components.push(comp),
+        }
+    }
+    components.into_iter().collect()
+}
+
+pub fn resolve_path_literal(raw: &str, home: &Path) -> PathBuf {
+    let p = if raw.starts_with('/') {
+        PathBuf::from(raw)
+    } else {
+        home.join(raw)
+    };
+    normalize_path_lexical(&p)
+}
+
+pub fn resolve_literal_toolchain(name: &str, tc: &ToolchainConfig, home: &Path) -> ResolvedToolchain {
+    let rw_cache = tc.rw_cache.iter().map(|p| resolve_path_literal(p, home)).collect();
+    let runtime = tc.runtime.iter().map(|p| resolve_path_literal(p, home)).collect();
+    ResolvedToolchain {
+        name: name.to_string(),
+        rw_cache,
+        runtime,
+    }
+}
+
 /// Pure policy function: builds ordered mount plan without mutating the host filesystem or reading environment/config.
 pub fn build_mount_plan(
     options: &RunOptions,
@@ -257,6 +365,7 @@ pub fn build_mount_plan(
     uid: u32,
     config: &ConfigData,
     ssh_socket: Option<&Path>,
+    toolchains: &[ResolvedToolchain],
 ) -> MountPlan {
     let mut mounts = Vec::new();
 
@@ -368,6 +477,30 @@ pub fn build_mount_plan(
                 mounts.push(MountEntry {
                     host_path: Some(p.clone()),
                     target_path: p,
+                    kind: MountKind::BindReadOnly,
+                });
+            }
+        }
+    }
+
+    // 8b. Toolchains (in --with order)
+    for tc in toolchains {
+        // rw_cache (Read-Write) rendered before runtime
+        for p in &tc.rw_cache {
+            if p.exists() {
+                mounts.push(MountEntry {
+                    host_path: Some(p.clone()),
+                    target_path: p.clone(),
+                    kind: MountKind::BindReadWrite,
+                });
+            }
+        }
+        // runtime (Read-Only)
+        for p in &tc.runtime {
+            if p.exists() {
+                mounts.push(MountEntry {
+                    host_path: Some(p.clone()),
+                    target_path: p.clone(),
                     kind: MountKind::BindReadOnly,
                 });
             }
@@ -491,11 +624,12 @@ mod tests {
             agent_cmd: OsString::from("claude"),
             agent_args: vec![],
             no_ssh: false,
+            with_toolchains: vec![],
         };
 
         let config = load_config();
         // Calling build_mount_plan does not create missing files on host
-        let _plan = build_mount_plan(&opts, &home, &cwd, 1000, &config, None);
+        let _plan = build_mount_plan(&opts, &home, &cwd, 1000, &config, None, &[]);
         assert!(!home.join(".claude").exists());
         assert!(!home.join(".claude.json").exists());
     }
@@ -517,10 +651,11 @@ mod tests {
             agent_cmd: OsString::from("sh"),
             agent_args: vec![],
             no_ssh: false,
+            with_toolchains: vec![],
         };
 
         let config = load_config();
-        let plan = build_mount_plan(&opts, &home, &cwd, 1000, &config, None);
+        let plan = build_mount_plan(&opts, &home, &cwd, 1000, &config, None, &[]);
 
         let canonical_cwd = fs::canonicalize(&cwd).unwrap();
         let canonical_sub = fs::canonicalize(&sub).unwrap();
@@ -643,10 +778,11 @@ mod tests {
             agent_cmd: OsString::from("test_agent"),
             agent_args: vec![],
             no_ssh: false,
+            with_toolchains: vec![],
         };
 
         let config = load_effective_config(home).expect("effective config loads");
-        let plan = build_mount_plan(&opts, home, &cwd, 1000, &config, None);
+        let plan = build_mount_plan(&opts, home, &cwd, 1000, &config, None, &[]);
 
         let mut state_idx = None;
         let mut runtime_idx = None;
@@ -689,10 +825,11 @@ mod tests {
             agent_cmd: OsString::from("claude"),
             agent_args: vec![],
             no_ssh: false,
+            with_toolchains: vec![],
         };
 
         let config = load_config();
-        let plan = build_mount_plan(&opts, &home, &cwd, 1000, &config, Some(&sock));
+        let plan = build_mount_plan(&opts, &home, &cwd, 1000, &config, Some(&sock), &[]);
 
         // 1. Target mount at /run/user/1000/ssh-agent.sock exists with BindReadOnly
         let target_sock = PathBuf::from("/run/user/1000/ssh-agent.sock");
@@ -736,10 +873,11 @@ mod tests {
             agent_cmd: OsString::from("claude"),
             agent_args: vec![],
             no_ssh: false,
+            with_toolchains: vec![],
         };
 
         let config = load_config();
-        let plan = build_mount_plan(&opts, &home, &cwd, 1000, &config, None);
+        let plan = build_mount_plan(&opts, &home, &cwd, 1000, &config, None, &[]);
 
         let target_sock = PathBuf::from("/run/user/1000/ssh-agent.sock");
         assert!(!plan.mounts.iter().any(|m| m.target_path == target_sock));
@@ -761,12 +899,13 @@ mod tests {
             agent_cmd: OsString::from("claude"),
             agent_args: vec![],
             no_ssh: true,
+            with_toolchains: vec![],
         };
 
         let config = load_config();
         // Caller (main.rs) passes None when no_ssh is true
         let ssh_socket = if opts.no_ssh { None } else { Some(sock.as_path()) };
-        let plan = build_mount_plan(&opts, &home, &cwd, 1000, &config, ssh_socket);
+        let plan = build_mount_plan(&opts, &home, &cwd, 1000, &config, ssh_socket, &[]);
 
         // When no_ssh is true, socket is NOT mounted and SSH_AUTH_SOCK is unset
         let target_sock = PathBuf::from("/run/user/1000/ssh-agent.sock");
@@ -788,18 +927,169 @@ mod tests {
             agent_cmd: OsString::from("claude"),
             agent_args: vec![],
             no_ssh: false,
+            with_toolchains: vec![],
         };
 
         let mut config = load_config();
         let missing_path = "/nonexistent/test_tmpfs_dir_abc123";
         config.defaults.tmpfs.push(missing_path.to_string());
 
-        let plan = build_mount_plan(&opts, &home, &cwd, 1000, &config, None);
+        let plan = build_mount_plan(&opts, &home, &cwd, 1000, &config, None, &[]);
 
         // Standard /tmp exists and is mounted
         assert!(plan.mounts.iter().any(|m| m.target_path == Path::new("/tmp") && m.kind == MountKind::Tmpfs));
         // Missing tmpfs path is skipped
         assert!(!plan.mounts.iter().any(|m| m.target_path == Path::new(missing_path)));
+    }
+
+    #[test]
+    fn test_toolchain_config_parse() {
+        let toml_str = r#"
+            [defaults]
+            ro_system = ["/usr"]
+            ro_home = []
+            rw_cache = []
+            tmpfs = []
+
+            [toolchains.mytool]
+            requires = ["bin/mytool"]
+            rw_cache = [".mytool/cache"]
+            runtime = [".mytool/config"]
+            check_tcp = [{ addr = "127.0.0.1:9999", hint = "run server" }]
+        "#;
+        let cfg: ConfigData = toml::from_str(toml_str).expect("toolchains parse cleanly");
+        assert!(cfg.toolchains.contains_key("mytool"));
+        let tc = &cfg.toolchains["mytool"];
+        assert_eq!(tc.requires, vec!["bin/mytool"]);
+        assert_eq!(tc.rw_cache, vec![".mytool/cache"]);
+        assert_eq!(tc.runtime, vec![".mytool/config"]);
+        assert_eq!(
+            tc.check_tcp,
+            vec![TcpCheckConfig {
+                addr: "127.0.0.1:9999".into(),
+                hint: "run server".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn test_merge_user_config_toolchains() {
+        let mut config = ConfigData {
+            defaults: DefaultsConfig {
+                ro_system: vec![],
+                ro_home: vec![],
+                rw_cache: vec![],
+                tmpfs: vec![],
+            },
+            profiles: HashMap::new(),
+            toolchains: HashMap::new(),
+            sources: vec![],
+        };
+        config.toolchains.insert(
+            "test_tc".into(),
+            ToolchainConfig {
+                requires: vec!["req1".into()],
+                rw_cache: vec!["cache1".into(), "moved_to_ro".into()],
+                runtime: vec!["ro1".into(), "moved_to_rw".into()],
+                check_tcp: vec![],
+            },
+        );
+
+        let mut user_config = UserConfigData::default();
+        user_config.toolchains.insert(
+            "test_tc".into(),
+            UserToolchainConfig {
+                requires: vec!["req2".into()],
+                rw_cache: vec!["moved_to_rw".into(), "new_cache".into()],
+                runtime: vec!["moved_to_ro".into(), "new_ro".into()],
+                check_tcp: vec![TcpCheckConfig {
+                    addr: "127.0.0.1:5037".into(),
+                    hint: "start adb".into(),
+                }],
+            },
+        );
+
+        merge_user_config(&mut config, user_config);
+
+        let merged = &config.toolchains["test_tc"];
+        assert_eq!(merged.requires, vec!["req1", "req2"]);
+        // moved_to_rw moved from runtime into rw_cache
+        assert!(!merged.runtime.contains(&"moved_to_rw".to_string()));
+        assert!(merged.rw_cache.contains(&"moved_to_rw".to_string()));
+        assert!(merged.rw_cache.contains(&"new_cache".to_string()));
+
+        // moved_to_ro moved from rw_cache into runtime
+        assert!(!merged.rw_cache.contains(&"moved_to_ro".to_string()));
+        assert!(merged.runtime.contains(&"moved_to_ro".to_string()));
+        assert!(merged.runtime.contains(&"new_ro".to_string()));
+
+        assert_eq!(merged.check_tcp.len(), 1);
+        assert_eq!(merged.check_tcp[0].addr, "127.0.0.1:5037");
+    }
+
+    #[test]
+    fn test_build_mount_plan_with_toolchains_literal() {
+        let dir = tempdir().unwrap();
+        let home = dir.path().join("home");
+        let cwd = dir.path().join("project");
+        let tc_cache = home.join(".mytool").join("cache");
+        let tc_runtime = home.join(".mytool").join("sdk");
+        let tc_uncreated = home.join(".mytool").join("missing_cache");
+        fs::create_dir_all(&tc_cache).unwrap();
+        fs::create_dir_all(&tc_runtime).unwrap();
+        fs::create_dir_all(&cwd).unwrap();
+
+        let opts = RunOptions {
+            extra_dirs: vec![],
+            agent_cmd: OsString::from("sh"),
+            agent_args: vec![],
+            no_ssh: false,
+            with_toolchains: vec!["mytool".into()],
+        };
+
+        let mut config = load_config();
+        config.toolchains.insert(
+            "mytool".into(),
+            ToolchainConfig {
+                requires: vec![],
+                rw_cache: vec![".mytool/cache".into(), ".mytool/missing_cache".into()],
+                runtime: vec![".mytool/sdk".into()],
+                check_tcp: vec![],
+            },
+        );
+
+        let resolved_tc = resolve_literal_toolchain("mytool", &config.toolchains["mytool"], &home);
+        let plan = build_mount_plan(&opts, &home, &cwd, 1000, &config, None, &[resolved_tc]);
+
+        // Toolchain rw_cache mounted as BindReadWrite
+        let cache_idx = plan
+            .mounts
+            .iter()
+            .position(|m| m.target_path == tc_cache && m.kind == MountKind::BindReadWrite)
+            .expect("tc_cache mount must exist as BindReadWrite");
+
+        // Toolchain runtime mounted as BindReadOnly
+        let runtime_idx = plan
+            .mounts
+            .iter()
+            .position(|m| m.target_path == tc_runtime && m.kind == MountKind::BindReadOnly)
+            .expect("tc_runtime mount must exist as BindReadOnly");
+
+        // rw_cache mounted before runtime
+        assert!(cache_idx < runtime_idx, "rw_cache must be mounted before runtime");
+
+        // Uncreated cache path was NOT mounted and NOT created
+        assert!(!plan.mounts.iter().any(|m| m.target_path == tc_uncreated));
+        assert!(!tc_uncreated.exists(), "uncreated toolchain cache must never be created");
+
+        // Toolchain mounted before working directory
+        let canonical_cwd = fs::canonicalize(&cwd).unwrap();
+        let cwd_idx = plan
+            .mounts
+            .iter()
+            .position(|m| m.target_path == canonical_cwd)
+            .expect("cwd mount must exist");
+        assert!(runtime_idx < cwd_idx, "toolchains must be mounted before cwd");
     }
 
     #[test]

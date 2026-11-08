@@ -28,8 +28,8 @@ fn main() -> ExitCode {
             print_version();
             ExitCode::SUCCESS
         }
-        CliCommand::Doctor => {
-            if run_doctor() {
+        CliCommand::Doctor { with_toolchains } => {
+            if run_doctor(&with_toolchains) {
                 ExitCode::SUCCESS
             } else {
                 ExitCode::from(1)
@@ -70,6 +70,14 @@ fn main() -> ExitCode {
                 }
             };
 
+            // Unknown toolchain check
+            for name in &opts.with_toolchains {
+                if !config.toolchains.contains_key(name) {
+                    eprintln!("Error: unknown toolchain '{name}'");
+                    return ExitCode::from(1);
+                }
+            }
+
             // Warn if no profile matches agent basename (unknown agent fail-loudly policy)
             let agent_name = agent_basename(&opts.agent_cmd);
             if !config.profiles.contains_key(agent_name) {
@@ -100,8 +108,23 @@ fn main() -> ExitCode {
                 return ExitCode::from(1);
             }
 
+            // Resolve toolchains
+            let mut resolved_toolchains = Vec::new();
+            for name in &opts.with_toolchains {
+                let tc = &config.toolchains[name];
+                resolved_toolchains.push(cave::policy::resolve_literal_toolchain(name, tc, &home));
+            }
+
             // Pure policy evaluation: build mount and environment plan
-            let plan = build_mount_plan(&opts, &home, &cwd, uid, &config, ssh_socket.as_deref());
+            let plan = build_mount_plan(
+                &opts,
+                &home,
+                &cwd,
+                uid,
+                &config,
+                ssh_socket.as_deref(),
+                &resolved_toolchains,
+            );
             let bwrap_args = render_args(&plan, &opts.agent_cmd, &opts.agent_args);
 
             let err = exec_bwrap(&bwrap_bin, &bwrap_args);
