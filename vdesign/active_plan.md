@@ -15,9 +15,9 @@ Decisions & rationale: `docs/architecture_design.md` › Toolchains, `vdesign/pr
 - [x] 6.2.3 Tests for Slice 2: Unit tests covering each expansion form (variable set, unset, `:-default`, missing binary, symlinked binary, `..` resolution), requires exit condition, unresolvable non-requires warning, and purity verification.
 
 ## Slice 3: TCP Diagnostics & Doctor (Plan step 3)
-- [ ] 6.3.1 `check_tcp` support: Parse `check_tcp = [{ addr, hint }]` in `ToolchainConfig`; implement non-blocking/short-timeout TCP connect check (`TcpStream::connect_timeout` tens of ms) in `src/policy.rs` / `src/main.rs` and warn on failure with hint at startup.
-- [ ] 6.3.2 Doctor integration: Update `cave --doctor` to accept `--with NAME` and report effective toolchain entries, resolved paths, and `check_tcp` connectivity status.
-- [ ] 6.3.3 Measure startup overhead with `--with flutter` ensuring it remains < 100 ms.
+- [x] 6.3.1 `check_tcp` support: Parse `check_tcp = [{ addr, hint }]` in `ToolchainConfig`; implement non-blocking/short-timeout TCP connect check (`TcpStream::connect_timeout` tens of ms) in `src/policy.rs` / `src/main.rs` and warn on failure with hint at startup.
+- [x] 6.3.2 Doctor integration: Update `cave --doctor` to accept `--with NAME` and report effective toolchain entries, resolved paths, and `check_tcp` connectivity status.
+- [x] 6.3.3 Measure startup overhead with `--with flutter` ensuring it remains < 100 ms (measured 0.75 ms avg, 0.59 ms min).
 
 ## Slice 4: Built-in Flutter Toolchain & Boundary Tests (Plan step 4)
 - [ ] 6.4.1 Embedded `[toolchains.flutter]` in `src/profiles.toml` with `requires`, `rw_cache` (`${bin:flutter}/../..`, `.pub-cache`, `.gradle/caches`, `.gradle/wrapper`, `.dartServer`), `runtime` (`${ANDROID_HOME:-Android/Sdk}`, `.android/debug.keystore`, `.config/flutter`), and `check_tcp` for adb (127.0.0.1:5037).

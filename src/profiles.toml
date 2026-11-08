@@ -75,3 +75,24 @@ state = []
 runtime = []
 state = []
 
+[toolchains.flutter]
+requires = [
+    "${bin:flutter}"
+]
+rw_cache = [
+    "${bin:flutter}/../..",
+    ".pub-cache",
+    ".gradle/caches",
+    ".gradle/wrapper",
+    ".dartServer"
+]
+runtime = [
+    "${ANDROID_HOME:-Android/Sdk}",
+    ".android/debug.keystore",
+    ".config/flutter"
+]
+check_tcp = [
+    { addr = "127.0.0.1:5037", hint = "start the host adb server: ADB_REJECT_KILL_SERVER=1 adb start-server" }
+]
+
+

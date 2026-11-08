@@ -201,7 +201,6 @@ pub fn print_version() {
 }
 
 pub fn run_doctor(with_toolchains: &[String]) -> bool {
-    let _ = with_toolchains;
     println!("cave doctor: inspecting system prerequisites and sandbox environment...\n");
     let mut ok = true;
 
@@ -485,6 +484,76 @@ pub fn run_doctor(with_toolchains: &[String]) -> bool {
                 if !tc.check_tcp.is_empty() {
                     let tcp_repr: Vec<_> = tc.check_tcp.iter().map(|t| format!("{} ({})", t.addr, t.hint)).collect();
                     println!("      check_tcp: {:?}", tcp_repr);
+                }
+            }
+        }
+    }
+
+    // 8. Toolchain diagnostics if requested via --with
+    if !with_toolchains.is_empty() {
+        println!();
+        println!("Requested toolchain diagnostics (--with):");
+        if let (Some(home), Some(config)) = (&home_path, &effective_config) {
+            for name in with_toolchains {
+                if let Some(tc) = config.toolchains.get(name) {
+                    println!("  Toolchain '{name}':");
+                    for req in &tc.requires {
+                        match crate::policy::expand_entry(req, home, &crate::policy::SystemLookup) {
+                            Some(p) if p.exists() => {
+                                println!("    [OK] requires: '{req}' -> {} (found)", p.display());
+                            }
+                            Some(p) => {
+                                println!("    [FAIL] requires: '{req}' -> {} (not found)", p.display());
+                                ok = false;
+                            }
+                            None => {
+                                println!("    [FAIL] requires: '{req}' (does not resolve)");
+                                ok = false;
+                            }
+                        }
+                    }
+
+                    for entry in &tc.rw_cache {
+                        match crate::policy::expand_entry(entry, home, &crate::policy::SystemLookup) {
+                            Some(p) if p.exists() => {
+                                println!("    [OK] rw_cache: '{entry}' -> {} (exists, RW)", p.display());
+                            }
+                            Some(p) => {
+                                println!("    [WARN] rw_cache: '{entry}' -> {} (missing on host, skipped)", p.display());
+                            }
+                            None => {
+                                println!("    [WARN] rw_cache: '{entry}' (does not resolve, skipped)");
+                            }
+                        }
+                    }
+
+                    for entry in &tc.runtime {
+                        match crate::policy::expand_entry(entry, home, &crate::policy::SystemLookup) {
+                            Some(p) if p.exists() => {
+                                println!("    [OK] runtime: '{entry}' -> {} (exists, RO)", p.display());
+                            }
+                            Some(p) => {
+                                println!("    [WARN] runtime: '{entry}' -> {} (missing on host, skipped)", p.display());
+                            }
+                            None => {
+                                println!("    [WARN] runtime: '{entry}' (does not resolve, skipped)");
+                            }
+                        }
+                    }
+
+                    for tcp in &tc.check_tcp {
+                        if crate::policy::check_tcp_port(&tcp.addr, 50) {
+                            println!("    [OK] check_tcp: {} (reachable)", tcp.addr);
+                        } else {
+                            println!(
+                                "    [WARN] check_tcp: {} (not listening; {})",
+                                tcp.addr, tcp.hint
+                            );
+                        }
+                    }
+                } else {
+                    println!("  [FAIL] unknown toolchain '{name}'");
+                    ok = false;
                 }
             }
         }

@@ -3,7 +3,9 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fs;
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MountKind {
@@ -290,11 +292,29 @@ pub fn is_socket(path: &Path) -> bool {
         fs::metadata(path)
             .map(|m| m.file_type().is_socket())
             .unwrap_or(false)
-    }
+        }
     #[cfg(not(unix))]
     {
         false
     }
+}
+
+pub fn check_tcp_port(addr_str: &str, timeout_ms: u64) -> bool {
+    let addrs: Vec<SocketAddr> = if let Ok(addr) = addr_str.parse::<SocketAddr>() {
+        vec![addr]
+    } else if let Ok(iter) = addr_str.to_socket_addrs() {
+        iter.collect()
+    } else {
+        return false;
+    };
+
+    let timeout = Duration::from_millis(timeout_ms);
+    for addr in addrs {
+        if TcpStream::connect_timeout(&addr, timeout).is_ok() {
+            return true;
+        }
+    }
+    false
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1305,5 +1325,20 @@ mod tests {
         let home = Path::new("/home/testuser");
         let expanded = expand_entry("${bin:mybin}/..", home, &lookup).unwrap();
         assert_eq!(expanded, fs::canonicalize(&bin_dir).unwrap());
+    }
+
+    #[test]
+    fn test_check_tcp_port_listening_and_closed() {
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let addr = format!("127.0.0.1:{port}");
+
+        // While listening, check_tcp_port returns true
+        assert!(check_tcp_port(&addr, 50));
+
+        // When closed, check_tcp_port returns false
+        drop(listener);
+        assert!(!check_tcp_port(&addr, 50));
     }
 }

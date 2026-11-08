@@ -124,6 +124,16 @@ fn main() -> ExitCode {
                     }
                 }
 
+                // Check TCP services: warn at startup if nothing listens on addr
+                for tcp in &tc.check_tcp {
+                    if !cave::policy::check_tcp_port(&tcp.addr, 50) {
+                        eprintln!(
+                            "Warning: toolchain '{name}': nothing listening on {}; {}",
+                            tcp.addr, tcp.hint
+                        );
+                    }
+                }
+
                 // Resolve rw_cache: entry that does not resolve or does not exist warns and is skipped
                 let mut resolved_rw = Vec::new();
                 for entry in &tc.rw_cache {
