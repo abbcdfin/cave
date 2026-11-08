@@ -10,9 +10,9 @@ Decisions & rationale: `docs/architecture_design.md` › Toolchains, `vdesign/pr
 - [x] 6.1.4 Tests for Slice 1: Unit tests for toolchain config parsing, user config merging, `--with` CLI parsing, and literal toolchain mounting order.
 
 ## Slice 2: Expansion & Purity (Plan step 2)
-- [ ] 6.2.1 Pure expansion function in `src/policy.rs` over a lookup trait/closure supporting `${VAR}`, `${VAR:-default}`, and `${bin:NAME}` (using `bwrap::which_binary`, `fs::canonicalize` on binary, then lexical normalization for `..`).
-- [ ] 6.2.2 Resolution & validation in `src/main.rs`: Resolve toolchain entries in `main.rs`; exit 1 naming missing entry if a `requires` entry fails to resolve; emit single stderr warning naming toolchain and entry for non-`requires` unresolved entries and skip them; check resolved paths with `cli::check_warning` (`/` and `$HOME`). Pass resolved toolchains to `build_mount_plan`.
-- [ ] 6.2.3 Tests for Slice 2: Unit tests covering each expansion form (variable set, unset, `:-default`, missing binary, symlinked binary, `..` resolution), requires exit condition, unresolvable non-requires warning, and purity verification.
+- [x] 6.2.1 Pure expansion function in `src/policy.rs` over a lookup trait/closure supporting `${VAR}`, `${VAR:-default}`, and `${bin:NAME}` (using `bwrap::which_binary`, `fs::canonicalize` on binary, then lexical normalization for `..`).
+- [x] 6.2.2 Resolution & validation in `src/main.rs`: Resolve toolchain entries in `main.rs`; exit 1 naming missing entry if a `requires` entry fails to resolve; emit single stderr warning naming toolchain and entry for non-`requires` unresolved entries and skip them; check resolved paths with `cli::check_warning` (`/` and `$HOME`). Pass resolved toolchains to `build_mount_plan`.
+- [x] 6.2.3 Tests for Slice 2: Unit tests covering each expansion form (variable set, unset, `:-default`, missing binary, symlinked binary, `..` resolution), requires exit condition, unresolvable non-requires warning, and purity verification.
 
 ## Slice 3: TCP Diagnostics & Doctor (Plan step 3)
 - [ ] 6.3.1 `check_tcp` support: Parse `check_tcp = [{ addr, hint }]` in `ToolchainConfig`; implement non-blocking/short-timeout TCP connect check (`TcpStream::connect_timeout` tens of ms) in `src/policy.rs` / `src/main.rs` and warn on failure with hint at startup.

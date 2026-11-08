@@ -338,6 +338,70 @@ pub fn normalize_path_lexical(path: &Path) -> PathBuf {
     components.into_iter().collect()
 }
 
+pub trait ExpansionLookup {
+    fn lookup_var(&self, var: &str) -> Option<String>;
+    fn lookup_bin(&self, bin: &str) -> Option<PathBuf>;
+}
+
+pub struct SystemLookup;
+
+impl ExpansionLookup for SystemLookup {
+    fn lookup_var(&self, var: &str) -> Option<String> {
+        std::env::var(var).ok().filter(|v| !v.is_empty())
+    }
+
+    fn lookup_bin(&self, bin: &str) -> Option<PathBuf> {
+        if let Some(p) = crate::bwrap::which_binary(bin) {
+            fs::canonicalize(&p).ok().or(Some(p))
+        } else {
+            None
+        }
+    }
+}
+
+pub fn expand_string<L: ExpansionLookup + ?Sized>(template: &str, lookup: &L) -> Option<String> {
+    let mut result = String::new();
+    let mut rest = template;
+
+    while let Some(start) = rest.find("${") {
+        result.push_str(&rest[..start]);
+        let after_start = &rest[start + 2..];
+        let end = after_start.find('}')?;
+        let inner = &after_start[..end];
+        rest = &after_start[end + 1..];
+
+        if let Some(bin_name) = inner.strip_prefix("bin:") {
+            let bin_path = lookup.lookup_bin(bin_name)?;
+            result.push_str(&bin_path.to_string_lossy());
+        } else if let Some((var, default_val)) = inner.split_once(":-") {
+            let val = lookup
+                .lookup_var(var)
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| default_val.to_string());
+            result.push_str(&val);
+        } else {
+            let val = lookup.lookup_var(inner).filter(|v| !v.is_empty())?;
+            result.push_str(&val);
+        }
+    }
+    result.push_str(rest);
+    Some(result)
+}
+
+pub fn expand_entry<L: ExpansionLookup + ?Sized>(
+    entry: &str,
+    home: &Path,
+    lookup: &L,
+) -> Option<PathBuf> {
+    let expanded = expand_string(entry, lookup)?;
+    let path = if expanded.starts_with('/') {
+        PathBuf::from(expanded)
+    } else {
+        home.join(expanded)
+    };
+    Some(normalize_path_lexical(&path))
+}
+
 pub fn resolve_path_literal(raw: &str, home: &Path) -> PathBuf {
     let p = if raw.starts_with('/') {
         PathBuf::from(raw)
@@ -1099,5 +1163,147 @@ mod tests {
         assert!(parsed.is_ok(), "examples/profiles.toml failed to parse: {:?}", parsed.err());
         let user_cfg = parsed.unwrap();
         assert!(user_cfg.profiles.contains_key("myagent"));
+    }
+
+    struct MockLookup {
+        vars: HashMap<String, String>,
+        bins: HashMap<String, PathBuf>,
+    }
+
+    impl ExpansionLookup for MockLookup {
+        fn lookup_var(&self, var: &str) -> Option<String> {
+            self.vars.get(var).cloned()
+        }
+
+        fn lookup_bin(&self, bin: &str) -> Option<PathBuf> {
+            self.bins.get(bin).cloned()
+        }
+    }
+
+    #[test]
+    fn test_expansion_variable_set_and_unset() {
+        let mut vars = HashMap::new();
+        vars.insert("MY_DIR".to_string(), "custom_dir".to_string());
+        let lookup = MockLookup {
+            vars,
+            bins: HashMap::new(),
+        };
+
+        // Variable set
+        assert_eq!(
+            expand_string("${MY_DIR}/sub", &lookup),
+            Some("custom_dir/sub".to_string())
+        );
+
+        // Variable unset without default fails
+        assert_eq!(expand_string("${UNSET_VAR}/sub", &lookup), None);
+    }
+
+    #[test]
+    fn test_expansion_default_values() {
+        let mut vars = HashMap::new();
+        vars.insert("SET_VAR".to_string(), "present".to_string());
+        vars.insert("EMPTY_VAR".to_string(), "".to_string());
+        let lookup = MockLookup {
+            vars,
+            bins: HashMap::new(),
+        };
+
+        // When set, uses variable value
+        assert_eq!(
+            expand_string("${SET_VAR:-fallback}", &lookup),
+            Some("present".to_string())
+        );
+
+        // When unset, uses default value
+        assert_eq!(
+            expand_string("${UNSET_VAR:-fallback}", &lookup),
+            Some("fallback".to_string())
+        );
+
+        // When empty, uses default value
+        assert_eq!(
+            expand_string("${EMPTY_VAR:-fallback}", &lookup),
+            Some("fallback".to_string())
+        );
+    }
+
+    #[test]
+    fn test_expansion_bin_lookup_and_missing() {
+        let mut bins = HashMap::new();
+        bins.insert(
+            "flutter".to_string(),
+            PathBuf::from("/opt/flutter/bin/flutter"),
+        );
+        let lookup = MockLookup {
+            vars: HashMap::new(),
+            bins,
+        };
+
+        // Found binary
+        assert_eq!(
+            expand_string("${bin:flutter}/../..", &lookup),
+            Some("/opt/flutter/bin/flutter/../..".to_string())
+        );
+
+        // Missing binary fails
+        assert_eq!(expand_string("${bin:nonexistent}", &lookup), None);
+    }
+
+    #[test]
+    fn test_expand_entry_and_dot_dot_resolution() {
+        let mut bins = HashMap::new();
+        bins.insert(
+            "flutter".to_string(),
+            PathBuf::from("/opt/flutter/bin/flutter"),
+        );
+        let lookup = MockLookup {
+            vars: HashMap::new(),
+            bins,
+        };
+        let home = Path::new("/home/testuser");
+
+        // ${bin:flutter}/../.. resolves lexically to /opt/flutter
+        let p = expand_entry("${bin:flutter}/../..", home, &lookup).unwrap();
+        assert_eq!(p, PathBuf::from("/opt/flutter"));
+
+        // $HOME-relative path resolution
+        let p2 = expand_entry(".pub-cache", home, &lookup).unwrap();
+        assert_eq!(p2, PathBuf::from("/home/testuser/.pub-cache"));
+
+        // Host-absolute path
+        let p3 = expand_entry("/etc/custom", home, &lookup).unwrap();
+        assert_eq!(p3, PathBuf::from("/etc/custom"));
+    }
+
+    #[test]
+    fn test_symlinked_binary_resolution() {
+        let dir = tempdir().unwrap();
+        let bin_dir = dir.path().join("real_bin");
+        let symlink_dir = dir.path().join("symlink_dir");
+        fs::create_dir_all(&bin_dir).unwrap();
+        fs::create_dir_all(&symlink_dir).unwrap();
+
+        let real_binary = bin_dir.join("mybin");
+        fs::write(&real_binary, "#!/bin/sh\n").unwrap();
+
+        let symlink_path = symlink_dir.join("mybin");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&real_binary, &symlink_path).unwrap();
+
+        // SystemLookup canonicalizes the binary path
+        let canonical = fs::canonicalize(&symlink_path).unwrap();
+        assert_eq!(canonical, fs::canonicalize(&real_binary).unwrap());
+
+        let mut bins = HashMap::new();
+        bins.insert("mybin".to_string(), canonical);
+        let lookup = MockLookup {
+            vars: HashMap::new(),
+            bins,
+        };
+
+        let home = Path::new("/home/testuser");
+        let expanded = expand_entry("${bin:mybin}/..", home, &lookup).unwrap();
+        assert_eq!(expanded, fs::canonicalize(&bin_dir).unwrap());
     }
 }

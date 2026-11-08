@@ -156,7 +156,7 @@ fn validate_path(path: &Path) -> Result<(), CliError> {
     }
 }
 
-fn check_warning(path: &Path) {
+pub fn check_warning(path: &Path) {
     let canonical = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     if canonical == Path::new("/") {
         eprintln!("Warning: --dir / exposes the host root filesystem, defeating sandbox boundaries.");
