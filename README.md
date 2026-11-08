@@ -65,6 +65,7 @@ cave options must come before the agent command; everything from the agent comma
 | :--- | :--- |
 | `cave claude --dangerously-skip-permissions` | Runs Claude Code in YOLO mode, sandboxed to the CWD |
 | `cave <agent>` | Runs the specified agent command inside the isolated environment |
+| `cave --with <toolchain> <agent>` | Adds a project toolchain (e.g. `flutter`) to the session (repeatable) |
 | `cave --no-ssh <agent>` | Disables forwarding the host SSH agent socket for this session |
 | `cave --dir ../shared-lib claude` | Also allows read-write access to `../shared-lib` |
 | `cave --ro-dir ~/reference claude` | Also allows read-only access to `~/reference` |
@@ -84,6 +85,24 @@ cave options must come before the agent command; everything from the agent comma
 - **Host Drop-ins (`/etc/ssh/ssh_config.d`)**: System drop-in directories are masked with an empty tmpfs so OpenSSH does not reject host root-owned files (which appear as `nobody` inside unprivileged user namespaces). Host-wide custom SSH configurations belong in `~/.ssh/config`.
 - **Opt-out**: Pass `--no-ssh` before the agent command (`cave --no-ssh <agent>`) to disable forwarding for that session.
 - **Stale Sockets**: If `SSH_AUTH_SOCK` points to a missing or non-socket path, `cave` emits a warning to stderr and unsets the variable inside the sandbox without failing the session.
+
+### Toolchain Support (`--with NAME`)
+
+Toolchains add project-specific SDKs, caches, and configuration to an agent session without cluttering the global default sandbox:
+
+- **Built-in `flutter`**:
+  - Requires `${bin:flutter}` on `PATH` (resolves symlinks to locate the SDK root).
+  - Mounts SDK root read-write (`rw_cache`), along with `~/.pub-cache`, `~/.gradle/caches`, `~/.gradle/wrapper`, and `~/.dartServer`.
+  - Mounts Android SDK (`${ANDROID_HOME:-Android/Sdk}`), debug keystore (`~/.android/debug.keystore`), and `~/.config/flutter` read-only.
+  - Sensitive files (`~/.gradle/gradle.properties`, `~/.android/adbkey`) stay hidden inside the private `$HOME` tmpfs.
+  - Checks for host `adb` server at `127.0.0.1:5037` and warns with startup instructions if not running.
+- **Host ADB Server Guard**:
+  To prevent an agent from inadvertently killing the host `adb` server via `adb kill-server`, start the host server with:
+  ```bash
+  ADB_REJECT_KILL_SERVER=1 adb start-server
+  ```
+- **Custom Toolchains**:
+  Define custom toolchains under `[toolchains.NAME]` in `~/.config/cave/profiles.toml`. Supports path expansion (`${VAR}`, `${VAR:-default}`, `${bin:NAME}`), `requires = [...]`, `rw_cache = [...]`, `runtime = [...]`, and `check_tcp = [{ addr, hint }]`.
 
 To customize mount paths or define new agent profiles, create a configuration file at:
 `~/.config/cave/profiles.toml` (or `${XDG_CONFIG_HOME:-$HOME/.config}/cave/profiles.toml`)
