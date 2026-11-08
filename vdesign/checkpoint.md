@@ -13,4 +13,4 @@
 ## Next Steps
 - Optional host housekeeping: move `ServerAliveInterval 120` from `/etc/ssh/ssh_config.d/50-general-client.conf` into `~/.ssh/config` if desired inside `cave`.
 - Publish `cave-git` to the AUR.
-- Evaluate candidates in `vdesign/plan.md` when ready for Phase 6.
+- Build Phase 6 (Toolchains, `cave --with flutter`), accepted 2026-11-08: draft the board in `vdesign/active_plan.md` from `vdesign/plan.md` › Phase 6, then build it.

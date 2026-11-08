@@ -1,6 +1,6 @@
 # Proposal: toolchains (`--with NAME`)
 
-Status: DRAFT, 2026-11-08. Candidate line: `vdesign/plan.md` › Candidates.
+Status: ACCEPTED 2026-11-08 as Phase 6 (`vdesign/plan.md`). Decisions recorded in `docs/architecture_design.md` › Toolchains, which governs where this text differs.
 
 ## Problem
 
@@ -42,7 +42,8 @@ requires = ["${bin:flutter}"]
 rw_cache = [
     "${bin:flutter}/../..",   # SDK: flutter writes bin/cache (lock file, engine artifacts) on every run
     ".pub-cache",
-    ".gradle",
+    ".gradle/caches",
+    ".gradle/wrapper",
     ".dartServer",
 ]
 runtime = [
@@ -88,18 +89,8 @@ Expansion is a pure function over a lookup (environment and `PATH`), unit-testab
 
 - The Flutter SDK is writable: a clumsy agent can damage it. It is reinstallable, so it is classed as a cache.
 - Expansion is a new mechanism. It is limited to three forms and never runs commands.
-- If `~/.gradle/gradle.properties` holds signing passwords, `.gradle` exposes them; mount `.gradle/caches` and `.gradle/wrapper` instead.
+- `~/.gradle/gradle.properties` can hold signing passwords, so only `.gradle/caches` and `.gradle/wrapper` are mounted; Gradle's other files in `~/.gradle` are per-session.
 
-## Open questions for acceptance
+## Done when
 
-1. Flag name: `--with` (recommended) or `--toolchain`. `--profile` is taken by the agent-profile candidate, which stays separate (decided 2026-11-08): it replaces the agent profile, `--with` adds to the session.
-2. Built-in `flutter` toolchain, or document it as a user-file example only.
-
-## Done when (draft)
-
-- `cave --with flutter sh -c 'flutter doctor -v'` finds Flutter, the Android SDK and the Android toolchain.
-- Under `cave --with flutter claude`: `flutter build apk --debug` succeeds, and `flutter run` installs on a host-provided device with hot reload working.
-- `--with` an unknown name exits 1; `--with flutter` without `flutter` on `PATH` exits 1 naming the missing entry; with no host adb server, the startup warning shows the hint.
-- `cave --doctor --with flutter` prints the resolved entries.
-- Unit tests for expansion and the new entry kinds; a boundary test with a fake toolchain on `PATH` (no real Flutter needed); a mutation check on `requires`.
-- `docs/architecture_design.md` (the toolchains table, expansion, mount order), `docs/product_specification.md` (Scope: toolchains) and README updated.
+`vdesign/plan.md` › Phase 6.

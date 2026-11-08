@@ -25,6 +25,7 @@ cave protects against an agent that *accidentally* reaches files outside the all
 - **Everything else is hidden**, including the rest of the home directory (`~/.config` too) and the host's `/tmp` and `/run` (the sandbox gets private ones).
 - **The agent's own config and sessions are the host's** (decided 2026-10-22): declared agent state is the live host directory, not a copy, so a session started under cave continues on the host and the reverse. An agent cave has no profile for gets an ephemeral home instead; cave warns on startup rather than losing its state in silence.
 - **SSH keys are usable, not readable** (decided 2026-10-23): the host ssh-agent is forwarded by default, so git over ssh works, while the key files stay hidden. `--no-ssh` turns it off for a session.
+- **Toolchains are added per session** (decided 2026-11-08, pending Phase 6): `--with NAME` adds a project's toolchain, such as the built-in `flutter`. Its SDK and caches are read-write like other shared tool caches, its configuration is read-only, its credentials stay hidden, and cave stops if the toolchain is not installed. Android apps are debugged on devices the host provides, through the host's adb server. iOS and targets that open windows are out of scope.
 - Ordinary commands that reach host files through a service count as file access, so those services are hidden too: the Docker socket (`docker run -v /:/host`) and the user session bus (`systemctl --user`).
 
 Out of scope:
@@ -40,6 +41,7 @@ Linux only for now. Other platforms may follow.
 
 - cave adds no agent flags. YOLO mode is enabled by the user passing the agent's own flag (`cave claude --dangerously-skip-permissions`), keeping that choice under the user's control.
 - Extra allowed directories are added with `--dir PATH` (read-write) or `--ro-dir PATH` (read-only), repeatable. Every allowed directory appears at its host path, so relative paths between them, absolute paths inside projects, and agent state keyed by path (`~/.claude/projects/<cwd>/`) all stay valid. There are no custom target paths. An explicitly allowed path overrides the default for that path: `--dir /tmp` shows the host's `/tmp`, and `--ro-dir .` makes the working directory read-only. cave warns on `--dir /` and `--dir ~`, which undo the boundary. A user config file (`~/.config/cave/profiles.toml`, layered with append semantics) adds paths permanently; it is user-global, never per-project, so the agent cannot reach the policy that confines it.
+- Toolchains are added with `--with NAME` (pending Phase 6), repeatable: `cave --with flutter claude`.
 - cave's own commands are options (`cave --doctor`), so no agent command name is reserved.
 
 ## Key Requirements
@@ -59,3 +61,6 @@ Linux only for now. Other platforms may follow.
 - Antigravity (`agy`)
 - Aider (`aider`)
 - General CLI / shell workflows
+
+## Supported Toolchains
+- Flutter with Android (`flutter`) (pending Phase 6)

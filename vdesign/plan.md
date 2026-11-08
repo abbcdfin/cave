@@ -14,6 +14,24 @@ Rationale: `docs/architecture_design.md` › Delivery Approach.
   - Outcome: Created Arch Linux VCS package specification in `packaging/arch/PKGBUILD` for `cave-git` (provides/conflicts with `cave`, runtime dependency `bubblewrap`, build dependencies `cargo`/`git`). Dynamic `pkgver()` supports git tags and commit count fallbacks. Formalized project licensing with root MIT `LICENSE` and enhanced `Cargo.toml` metadata (description, repository, homepage, license). Reconciled `README.md` with exact installation semantics (git branch build vs local cargo testing), clarified default `~/.config` inheritance isolation, and removed privileged `.npmrc` from config examples. Validated package build with `makepkg` pulling from GitHub into `cave-git-*.pkg.tar.zst`, verified with `tar -tf` containing `/usr/bin/cave`, documentation, license, and `/usr/share/doc/cave/profiles.toml.example` from `examples/profiles.toml`.
 - [x] Phase 5: SSH via the host ssh-agent
   - Outcome: Host `ssh-agent` socket forwarded read-only at `/run/user/$UID/ssh-agent.sock` (with `0700` runtime directory permissions via `MountEntry::DirPerms` and `MountPlan::set_env` overrides) when `SSH_AUTH_SOCK` resolves to a valid Unix socket (`policy::resolve_ssh_socket`). Added `.ssh/config` and `.ssh/known_hosts` to `defaults.ro_home` while keeping private keys (`~/.ssh/id_*`) hidden on the empty `$HOME` tmpfs. Masked `/etc/ssh/ssh_config.d` with an empty `tmpfs` (skipping missing `tmpfs` paths in `build_mount_plan` via `p.exists()`) so OpenSSH does not abort on host root-owned (`nobody` in userns) drop-in files. Added `--no-ssh` CLI flag and single-line stderr warning on stale `SSH_AUTH_SOCK`. `build_mount_plan` takes the resolved socket path as given (`Option<&Path>`) and reads no config and no environment (it does stat and canonicalize paths on disk). Extended `cave --doctor` to verify both offline config parsing (`ssh -G github.com`) and key visibility (`ssh-add -l`) inside the sandbox. Verified live with `ssh -T git@github.com`, `git ls-remote`, and live branch push/delete over SSH. Test suite expanded to 25 unit tests and 20 boundary tests (45 tests, all passing, 0 clippy warnings).
+- [ ] Phase 6: Toolchains — `cave --with flutter`
+  - Rationale: `docs/architecture_design.md` › Toolchains; argument: [`vdesign/proposals/toolchain-profiles.md`](proposals/toolchain-profiles.md). Accepted 2026-11-08.
+  - Plan, thin path first:
+    1. `[toolchains.*]` table (embedded and user file), `--with NAME` (unknown name fatal), `runtime` and `rw_cache` with literal `$HOME`-relative and host-absolute paths, rendered after the agent profile. A literal test toolchain mounts end to end.
+    2. Expansion (`${VAR}`, `${VAR:-default}`, `${bin:NAME}`) as a pure function over a lookup, resolved in `main.rs`; `requires` fatal; unresolved entries warned and skipped; `/` and `$HOME` warnings on resolved paths.
+    3. `check_tcp`, and `cave --doctor --with NAME`.
+    4. Built-in `flutter` toolchain; live verification on the dogfood host with a host-provided device (needs the user).
+    5. Reconcile design documents and README; remove the pending marks.
+  - Done when:
+    - `cave --with flutter sh -c 'flutter doctor -v'` finds Flutter, the Android SDK and the Android toolchain, with no write errors from read-only paths.
+    - Under `cave --with flutter claude`: `flutter build apk --debug` succeeds, and `flutter run` installs on a host-provided device with hot reload working.
+    - `--with` an unknown name exits 1; `--with flutter` without `flutter` on `PATH` exits 1 naming the missing entry; with no host adb server, the startup warning shows the hint.
+    - Inside `cave --with flutter`, `~/.gradle/gradle.properties` and `~/.android/adbkey` are not visible.
+    - `cave --doctor --with flutter` prints each entry, what it resolved to, and the `check_tcp` result.
+    - Whether a host adb server started with `ADB_REJECT_KILL_SERVER=1` refuses `adb kill-server` from inside cave is tested, and the docs and the `check_tcp` hint match the result.
+    - Startup overhead with `--with flutter` is measured and stays < 100 ms.
+    - Unit tests for expansion and the new entry kinds; a boundary test with a fake toolchain on `PATH` (no real Flutter needed); a mutation check on `requires`. Tests and clippy (`-D warnings`) green.
+    - `docs/architecture_design.md`, `docs/product_specification.md` and README match what was built.
 
 ## Candidates
 <!-- Unnumbered DRAFT ideas awaiting validation -->
@@ -25,4 +43,3 @@ Rationale: `docs/architecture_design.md` › Delivery Approach.
 - Candidate: `hide = [...]` class in the profile table, so a user file can remove an inherited default instead of only downgrading it. Deferred 2026-10-22 until a concrete need; it renders as a tmpfs mount, the mechanism that already hides `$HOME`.
 - Candidate: Per-project profile file (`./.cave/profiles.toml`) behind an explicit opt-in flag. Deferred 2026-10-22: the working directory is agent-writable, so the file could widen the boundary it defines.
 - Candidate: `--profile NAME` option to choose the agent profile explicitly, replacing selection by command basename, which misses agents launched through wrappers (`cave npx @anthropic-ai/claude-code`, `cave uv run aider` select `npx` / `uv`). Kept separate from `--with` in the toolchain proposal (decided 2026-11-08): `--profile` replaces the agent profile, `--with` adds toolchains to the session.
-- Candidate: Toolchains selected with `--with NAME` (built-in `flutter`, with Android device debugging through the host adb server). Drafted 2026-11-08: [`vdesign/proposals/toolchain-profiles.md`](proposals/toolchain-profiles.md).
