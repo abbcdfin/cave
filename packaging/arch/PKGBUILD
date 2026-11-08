@@ -2,7 +2,7 @@
 
 pkgname=cave-git
 _pkgname=cave
-pkgver=0.1.0.r18.gebfbc20
+pkgver=0.1.0.r21.ge0a2521
 pkgrel=1
 pkgdesc="Transparent sandbox runner for coding agents in YOLO mode"
 arch=('x86_64')
