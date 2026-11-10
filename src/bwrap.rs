@@ -39,12 +39,15 @@ pub fn which_binary(bin: &str) -> Option<PathBuf> {
                 return Some(candidate);
             }
         }
+        None
+    } else {
+        let std_bin = PathBuf::from("/usr/bin").join(bin);
+        if std_bin.is_file() {
+            Some(std_bin)
+        } else {
+            None
+        }
     }
-    let std_bin = PathBuf::from("/usr/bin").join(bin);
-    if std_bin.is_file() {
-        return Some(std_bin);
-    }
-    None
 }
 
 pub fn render_args(plan: &MountPlan, agent_cmd: &std::ffi::OsStr, agent_args: &[OsString]) -> Vec<OsString> {

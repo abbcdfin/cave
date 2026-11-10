@@ -114,13 +114,31 @@ fn main() -> ExitCode {
                 let tc = &config.toolchains[name];
                 let report = cave::policy::resolve_toolchain(name, tc, &home, &cave::policy::SystemLookup);
 
-                // Fatal check: any entry resolving to /, $HOME, or containing $HOME is fatal
-                let all_entries = report
-                    .requires
+                // 1. Check requires: any requires entry that is invalid or missing is fatal
+                for req in &report.requires {
+                    match &req.status {
+                        cave::policy::EntryResolution::Found(_) => {}
+                        cave::policy::EntryResolution::InvalidRootOrHome(p) => {
+                            eprintln!(
+                                "Error: toolchain '{name}' entry '{}' resolves to '{}', which is invalid (cannot mount /, $HOME, or a folder containing $HOME).",
+                                req.raw,
+                                p.display()
+                            );
+                            return ExitCode::from(1);
+                        }
+                        _ => {
+                            eprintln!("Error: toolchain '{name}' requires '{}', which could not be found.", req.raw);
+                            return ExitCode::from(1);
+                        }
+                    }
+                }
+
+                // 2. Fatal check: any rw_cache or runtime entry resolving to /, $HOME, or containing $HOME is fatal
+                let mount_entries = report
+                    .rw_cache
                     .iter()
-                    .chain(report.rw_cache.iter())
                     .chain(report.runtime.iter());
-                for entry in all_entries {
+                for entry in mount_entries {
                     if let cave::policy::EntryResolution::InvalidRootOrHome(ref p) = entry.status {
                         eprintln!(
                             "Error: toolchain '{name}' entry '{}' resolves to '{}', which is invalid (cannot mount /, $HOME, or a folder containing $HOME).",
@@ -128,17 +146,6 @@ fn main() -> ExitCode {
                             p.display()
                         );
                         return ExitCode::from(1);
-                    }
-                }
-
-                // Fatal check: any requires entry that does not resolve or does not exist is fatal
-                for req in &report.requires {
-                    match &req.status {
-                        cave::policy::EntryResolution::Found(_) => {}
-                        _ => {
-                            eprintln!("Error: toolchain '{name}' requires '{}', which could not be found.", req.raw);
-                            return ExitCode::from(1);
-                        }
                     }
                 }
 

@@ -77,7 +77,8 @@ state = []
 
 [toolchains.flutter]
 requires = [
-    "${bin:flutter}"
+    "${bin:flutter}",
+    "${bin:flutter}/../../packages/flutter_tools"
 ]
 rw_cache = [
     "${bin:flutter}/../..",

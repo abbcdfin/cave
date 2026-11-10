@@ -919,6 +919,11 @@ fn test_toolchain_flutter_boundary_and_isolation() {
         fs::set_permissions(&real_flutter, perms).unwrap();
     }
 
+    // Set up flutter sentinel package packages/flutter_tools in fake SDK
+    let flutter_tools = sdk_dir.join("packages").join("flutter_tools");
+    fs::create_dir_all(&flutter_tools).unwrap();
+    fs::write(flutter_tools.join("marker"), "sentinel").unwrap();
+
     // Reach flutter through a symlink on PATH
     let symlink_bin_dir = fixture._temp_dir.path().join("path_bin");
     fs::create_dir_all(&symlink_bin_dir).unwrap();
@@ -992,8 +997,14 @@ fn test_toolchain_flutter_boundary_and_isolation() {
     );
     assert!(String::from_utf8_lossy(&out1.stdout).contains("__SENTINEL_DONE__"));
 
-    // Case 2: Missing flutter exits 1 naming the entry
-    let clean_path = "/usr/bin:/bin";
+    // Case 2: Missing flutter exits 1 naming the entry (independent of host)
+    let isolated_bin = fixture._temp_dir.path().join("isolated_bin");
+    fs::create_dir_all(&isolated_bin).unwrap();
+    let host_bwrap = cave::bwrap::which_binary("bwrap").expect("bwrap on host");
+    let _ = symlink(&host_bwrap, isolated_bin.join("bwrap"));
+    let host_sh = cave::bwrap::which_binary("sh").expect("sh on host");
+    let _ = symlink(&host_sh, isolated_bin.join("sh"));
+
     let out2 = Command::new(cave_bin)
         .arg("--with")
         .arg("flutter")
@@ -1002,7 +1013,7 @@ fn test_toolchain_flutter_boundary_and_isolation() {
         .arg("true")
         .current_dir(working_dir)
         .env("HOME", test_home)
-        .env("PATH", clean_path)
+        .env("PATH", &isolated_bin)
         .env_remove("XDG_CONFIG_HOME")
         .output()
         .expect("Failed to execute cave");
@@ -1033,6 +1044,95 @@ fn test_toolchain_flutter_boundary_and_isolation() {
     assert!(
         stderr3.contains("unknown toolchain 'nonexistent_toolchain_xyz'"),
         "Expected error naming unknown toolchain, got: {stderr3}"
+    );
+
+    // Case 4: Plain flutter script at $HOME/bin/flutter (1b: flutter not in SDK exits 1 before running)
+    let home_bin = test_home.join("bin");
+    fs::create_dir_all(&home_bin).unwrap();
+    let home_flutter = home_bin.join("flutter");
+    fs::write(&home_flutter, "#!/bin/sh\nexit 0\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&home_flutter).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&home_flutter, perms).unwrap();
+    }
+    let home_flutter_path = format!("{}:{}", home_bin.display(), isolated_bin.display());
+    let canary_file_1b = test_home.join("canary_1b_ran");
+
+    let out4 = Command::new(cave_bin)
+        .arg("--with")
+        .arg("flutter")
+        .arg("sh")
+        .arg("-c")
+        .arg(format!("touch '{}'", canary_file_1b.display()))
+        .current_dir(working_dir)
+        .env("HOME", test_home)
+        .env("PATH", &home_flutter_path)
+        .env_remove("XDG_CONFIG_HOME")
+        .output()
+        .expect("Failed to execute cave");
+
+    assert_eq!(out4.status.code(), Some(1));
+    let stderr4 = String::from_utf8_lossy(&out4.stderr);
+    assert!(
+        stderr4.contains("Error: toolchain 'flutter' requires '${bin:flutter}/../../packages/flutter_tools', which could not be found."),
+        "Expected error naming missing flutter_tools, got: {stderr4}"
+    );
+    assert!(
+        !canary_file_1b.exists(),
+        "Command must never run when toolchain validation fails"
+    );
+
+    // Case 5: 1a with no sentinel in user config: rw_cache = ["${bin:faketool}/../.."]
+    // Resolving to $HOME must exit 1 and command must never run.
+    let faketool_bin = home_bin.join("faketool");
+    fs::write(&faketool_bin, "#!/bin/sh\nexit 0\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&faketool_bin).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&faketool_bin, perms).unwrap();
+    }
+
+    let user_config_dir = test_home.join(".config").join("cave");
+    fs::create_dir_all(&user_config_dir).unwrap();
+    let user_config_file = user_config_dir.join("profiles.toml");
+    fs::write(
+        &user_config_file,
+        r#"
+[toolchains.nosentinel]
+rw_cache = ["${bin:faketool}/../.."]
+"#,
+    )
+    .unwrap();
+
+    let canary_file_1a = test_home.join("canary_1a_ran");
+    let out5 = Command::new(cave_bin)
+        .arg("--with")
+        .arg("nosentinel")
+        .arg("sh")
+        .arg("-c")
+        .arg(format!("touch '{}'", canary_file_1a.display()))
+        .current_dir(working_dir)
+        .env("HOME", test_home)
+        .env("PATH", &home_flutter_path)
+        .env_remove("XDG_CONFIG_HOME")
+        .output()
+        .expect("Failed to execute cave");
+
+    assert_eq!(out5.status.code(), Some(1));
+    let stderr5 = String::from_utf8_lossy(&out5.stderr);
+    assert!(
+        stderr5.contains("Error: toolchain 'nosentinel' entry '${bin:faketool}/../..' resolves to")
+            && stderr5.contains("cannot mount /, $HOME, or a folder containing $HOME"),
+        "Expected error naming toolchain 'nosentinel' and invalid root/home entry, got: {stderr5}"
+    );
+    assert!(
+        !canary_file_1a.exists(),
+        "Command must never run when 1a invalid root/home entry is encountered"
     );
 }
 
