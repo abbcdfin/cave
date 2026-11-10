@@ -112,13 +112,31 @@ fn main() -> ExitCode {
             let mut resolved_toolchains = Vec::new();
             for name in &opts.with_toolchains {
                 let tc = &config.toolchains[name];
+                let report = cave::policy::resolve_toolchain(name, tc, &home, &cave::policy::SystemLookup);
 
-                // Check requires: any entry that does not resolve or does not exist is fatal
-                for req in &tc.requires {
-                    match cave::policy::expand_entry(req, &home, &cave::policy::SystemLookup) {
-                        Some(p) if p.exists() => {}
+                // Fatal check: any entry resolving to /, $HOME, or containing $HOME is fatal
+                let all_entries = report
+                    .requires
+                    .iter()
+                    .chain(report.rw_cache.iter())
+                    .chain(report.runtime.iter());
+                for entry in all_entries {
+                    if let cave::policy::EntryResolution::InvalidRootOrHome(ref p) = entry.status {
+                        eprintln!(
+                            "Error: toolchain '{name}' entry '{}' resolves to '{}', which is invalid (cannot mount /, $HOME, or a folder containing $HOME).",
+                            entry.raw,
+                            p.display()
+                        );
+                        return ExitCode::from(1);
+                    }
+                }
+
+                // Fatal check: any requires entry that does not resolve or does not exist is fatal
+                for req in &report.requires {
+                    match &req.status {
+                        cave::policy::EntryResolution::Found(_) => {}
                         _ => {
-                            eprintln!("Error: toolchain '{name}' requires '{req}', which could not be found.");
+                            eprintln!("Error: toolchain '{name}' requires '{}', which could not be found.", req.raw);
                             return ExitCode::from(1);
                         }
                     }
@@ -134,39 +152,19 @@ fn main() -> ExitCode {
                     }
                 }
 
-                // Resolve rw_cache: entry that does not resolve or does not exist warns and is skipped
-                let mut resolved_rw = Vec::new();
-                for entry in &tc.rw_cache {
-                    match cave::policy::expand_entry(entry, &home, &cave::policy::SystemLookup) {
-                        Some(p) if p.exists() => {
-                            cave::cli::check_warning(&p);
-                            resolved_rw.push(p);
-                        }
-                        _ => {
-                            eprintln!("Warning: toolchain '{name}' entry '{entry}' does not resolve; skipping.");
-                        }
+                // Warn on unresolvable/missing rw_cache and runtime entries
+                for entry in &report.rw_cache {
+                    if !matches!(entry.status, cave::policy::EntryResolution::Found(_)) {
+                        eprintln!("Warning: toolchain '{name}' entry '{}' does not resolve; skipping.", entry.raw);
+                    }
+                }
+                for entry in &report.runtime {
+                    if !matches!(entry.status, cave::policy::EntryResolution::Found(_)) {
+                        eprintln!("Warning: toolchain '{name}' entry '{}' does not resolve; skipping.", entry.raw);
                     }
                 }
 
-                // Resolve runtime: entry that does not resolve or does not exist warns and is skipped
-                let mut resolved_ro = Vec::new();
-                for entry in &tc.runtime {
-                    match cave::policy::expand_entry(entry, &home, &cave::policy::SystemLookup) {
-                        Some(p) if p.exists() => {
-                            cave::cli::check_warning(&p);
-                            resolved_ro.push(p);
-                        }
-                        _ => {
-                            eprintln!("Warning: toolchain '{name}' entry '{entry}' does not resolve; skipping.");
-                        }
-                    }
-                }
-
-                resolved_toolchains.push(cave::policy::ResolvedToolchain {
-                    name: name.clone(),
-                    rw_cache: resolved_rw,
-                    runtime: resolved_ro,
-                });
+                resolved_toolchains.push(report.to_resolved_toolchain());
             }
 
             // Pure policy evaluation: build mount and environment plan

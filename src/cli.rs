@@ -497,46 +497,69 @@ pub fn run_doctor(with_toolchains: &[String]) -> bool {
             for name in with_toolchains {
                 if let Some(tc) = config.toolchains.get(name) {
                     println!("  Toolchain '{name}':");
-                    for req in &tc.requires {
-                        match crate::policy::expand_entry(req, home, &crate::policy::SystemLookup) {
-                            Some(p) if p.exists() => {
-                                println!("    [OK] requires: '{req}' -> {} (found)", p.display());
+                    let report = crate::policy::resolve_toolchain(name, tc, home, &crate::policy::SystemLookup);
+
+                    for req in &report.requires {
+                        match &req.status {
+                            crate::policy::EntryResolution::Found(p) => {
+                                println!("    [OK] requires: '{}' -> {} (found)", req.raw, p.display());
                             }
-                            Some(p) => {
-                                println!("    [FAIL] requires: '{req}' -> {} (not found)", p.display());
+                            crate::policy::EntryResolution::Missing(p) => {
+                                println!("    [FAIL] requires: '{}' -> {} (not found)", req.raw, p.display());
                                 ok = false;
                             }
-                            None => {
-                                println!("    [FAIL] requires: '{req}' (does not resolve)");
+                            crate::policy::EntryResolution::Unresolved => {
+                                println!("    [FAIL] requires: '{}' (does not resolve)", req.raw);
+                                ok = false;
+                            }
+                            crate::policy::EntryResolution::InvalidRootOrHome(p) => {
+                                println!(
+                                    "    [FAIL] requires: '{}' -> {} (resolves to /, $HOME, or a folder containing $HOME)",
+                                    req.raw, p.display()
+                                );
                                 ok = false;
                             }
                         }
                     }
 
-                    for entry in &tc.rw_cache {
-                        match crate::policy::expand_entry(entry, home, &crate::policy::SystemLookup) {
-                            Some(p) if p.exists() => {
-                                println!("    [OK] rw_cache: '{entry}' -> {} (exists, RW)", p.display());
+                    for entry in &report.rw_cache {
+                        match &entry.status {
+                            crate::policy::EntryResolution::Found(p) => {
+                                println!("    [OK] rw_cache: '{}' -> {} (exists, RW)", entry.raw, p.display());
                             }
-                            Some(p) => {
-                                println!("    [WARN] rw_cache: '{entry}' -> {} (missing on host, skipped)", p.display());
+                            crate::policy::EntryResolution::Missing(p) => {
+                                println!("    [WARN] rw_cache: '{}' -> {} (missing on host, skipped)", entry.raw, p.display());
                             }
-                            None => {
-                                println!("    [WARN] rw_cache: '{entry}' (does not resolve, skipped)");
+                            crate::policy::EntryResolution::Unresolved => {
+                                println!("    [WARN] rw_cache: '{}' (does not resolve, skipped)", entry.raw);
+                            }
+                            crate::policy::EntryResolution::InvalidRootOrHome(p) => {
+                                println!(
+                                    "    [FAIL] rw_cache: '{}' -> {} (resolves to /, $HOME, or a folder containing $HOME)",
+                                    entry.raw, p.display()
+                                );
+                                ok = false;
                             }
                         }
                     }
 
-                    for entry in &tc.runtime {
-                        match crate::policy::expand_entry(entry, home, &crate::policy::SystemLookup) {
-                            Some(p) if p.exists() => {
-                                println!("    [OK] runtime: '{entry}' -> {} (exists, RO)", p.display());
+                    for entry in &report.runtime {
+                        match &entry.status {
+                            crate::policy::EntryResolution::Found(p) => {
+                                println!("    [OK] runtime: '{}' -> {} (exists, RO)", entry.raw, p.display());
                             }
-                            Some(p) => {
-                                println!("    [WARN] runtime: '{entry}' -> {} (missing on host, skipped)", p.display());
+                            crate::policy::EntryResolution::Missing(p) => {
+                                println!("    [WARN] runtime: '{}' -> {} (missing on host, skipped)", entry.raw, p.display());
                             }
-                            None => {
-                                println!("    [WARN] runtime: '{entry}' (does not resolve, skipped)");
+                            crate::policy::EntryResolution::Unresolved => {
+                                println!("    [WARN] runtime: '{}' (does not resolve, skipped)", entry.raw);
+                            }
+                            crate::policy::EntryResolution::InvalidRootOrHome(p) => {
+                                println!(
+                                    "    [FAIL] runtime: '{}' -> {} (resolves to /, $HOME, or a folder containing $HOME)",
+                                    entry.raw, p.display()
+                                );
+                                ok = false;
                             }
                         }
                     }

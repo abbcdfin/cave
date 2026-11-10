@@ -422,20 +422,117 @@ pub fn expand_entry<L: ExpansionLookup + ?Sized>(
     Some(normalize_path_lexical(&path))
 }
 
-pub fn resolve_path_literal(raw: &str, home: &Path) -> PathBuf {
-    let p = if raw.starts_with('/') {
-        PathBuf::from(raw)
-    } else {
-        home.join(raw)
-    };
-    normalize_path_lexical(&p)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EntryResolution {
+    Found(PathBuf),
+    Missing(PathBuf),
+    Unresolved,
+    InvalidRootOrHome(PathBuf),
 }
 
-pub fn resolve_literal_toolchain(name: &str, tc: &ToolchainConfig, home: &Path) -> ResolvedToolchain {
-    let rw_cache = tc.rw_cache.iter().map(|p| resolve_path_literal(p, home)).collect();
-    let runtime = tc.runtime.iter().map(|p| resolve_path_literal(p, home)).collect();
-    ResolvedToolchain {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedToolchainEntry {
+    pub raw: String,
+    pub status: EntryResolution,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolchainResolutionReport {
+    pub name: String,
+    pub requires: Vec<ResolvedToolchainEntry>,
+    pub rw_cache: Vec<ResolvedToolchainEntry>,
+    pub runtime: Vec<ResolvedToolchainEntry>,
+}
+
+impl ToolchainResolutionReport {
+    pub fn to_resolved_toolchain(&self) -> ResolvedToolchain {
+        ResolvedToolchain {
+            name: self.name.clone(),
+            rw_cache: self
+                .rw_cache
+                .iter()
+                .filter_map(|e| match &e.status {
+                    EntryResolution::Found(p) => Some(p.clone()),
+                    _ => None,
+                })
+                .collect(),
+            runtime: self
+                .runtime
+                .iter()
+                .filter_map(|e| match &e.status {
+                    EntryResolution::Found(p) => Some(p.clone()),
+                    _ => None,
+                })
+                .collect(),
+        }
+    }
+}
+
+pub fn resolve_entry<L: ExpansionLookup + ?Sized>(
+    entry: &str,
+    home: &Path,
+    lookup: &L,
+) -> EntryResolution {
+    let Some(expanded) = expand_string(entry, lookup) else {
+        return EntryResolution::Unresolved;
+    };
+    let path = if expanded.starts_with('/') {
+        PathBuf::from(expanded)
+    } else {
+        home.join(expanded)
+    };
+    let normalized = normalize_path_lexical(&path);
+    if normalized == Path::new("/")
+        || home.starts_with(&normalized)
+        || fs::canonicalize(home)
+            .map(|ch| ch.starts_with(&normalized))
+            .unwrap_or(false)
+    {
+        return EntryResolution::InvalidRootOrHome(normalized);
+    }
+    if normalized.exists() {
+        EntryResolution::Found(normalized)
+    } else {
+        EntryResolution::Missing(normalized)
+    }
+}
+
+pub fn resolve_toolchain<L: ExpansionLookup + ?Sized>(
+    name: &str,
+    tc: &ToolchainConfig,
+    home: &Path,
+    lookup: &L,
+) -> ToolchainResolutionReport {
+    let requires = tc
+        .requires
+        .iter()
+        .map(|entry| ResolvedToolchainEntry {
+            raw: entry.clone(),
+            status: resolve_entry(entry, home, lookup),
+        })
+        .collect();
+
+    let rw_cache = tc
+        .rw_cache
+        .iter()
+        .map(|entry| ResolvedToolchainEntry {
+            raw: entry.clone(),
+            status: resolve_entry(entry, home, lookup),
+        })
+        .collect();
+
+    let runtime = tc
+        .runtime
+        .iter()
+        .map(|entry| ResolvedToolchainEntry {
+            raw: entry.clone(),
+            status: resolve_entry(entry, home, lookup),
+        })
+        .collect();
+
+    ToolchainResolutionReport {
         name: name.to_string(),
+        requires,
         rw_cache,
         runtime,
     }
@@ -1142,7 +1239,8 @@ mod tests {
             },
         );
 
-        let resolved_tc = resolve_literal_toolchain("mytool", &config.toolchains["mytool"], &home);
+        let report = resolve_toolchain("mytool", &config.toolchains["mytool"], &home, &SystemLookup);
+        let resolved_tc = report.to_resolved_toolchain();
         let plan = build_mount_plan(&opts, &home, &cwd, 1000, &config, None, &[resolved_tc]);
 
         // Toolchain rw_cache mounted as BindReadWrite
@@ -1294,6 +1392,56 @@ mod tests {
         // Host-absolute path
         let p3 = expand_entry("/etc/custom", home, &lookup).unwrap();
         assert_eq!(p3, PathBuf::from("/etc/custom"));
+    }
+
+    #[test]
+    fn test_resolve_entry_invalid_root_and_home() {
+        let home = Path::new("/home/testuser");
+        let mut bins = HashMap::new();
+        bins.insert(
+            "mybin".to_string(),
+            PathBuf::from("/home/testuser/bin/mybin"),
+        );
+        let lookup = MockLookup {
+            vars: HashMap::new(),
+            bins,
+        };
+
+        // 1. Resolves directly to /
+        assert_eq!(
+            resolve_entry("/", home, &lookup),
+            EntryResolution::InvalidRootOrHome(PathBuf::from("/"))
+        );
+
+        // 2. Resolves via .. to /
+        assert_eq!(
+            resolve_entry("/opt/../..", home, &lookup),
+            EntryResolution::InvalidRootOrHome(PathBuf::from("/"))
+        );
+
+        // 3. Resolves to $HOME
+        assert_eq!(
+            resolve_entry("${bin:mybin}/../..", home, &lookup),
+            EntryResolution::InvalidRootOrHome(PathBuf::from("/home/testuser"))
+        );
+
+        // 4. Resolves to folder containing $HOME (/home)
+        assert_eq!(
+            resolve_entry("${bin:mybin}/../../..", home, &lookup),
+            EntryResolution::InvalidRootOrHome(PathBuf::from("/home"))
+        );
+
+        // 5. Resolves to another folder containing $HOME (/home via literal)
+        assert_eq!(
+            resolve_entry("/home", home, &lookup),
+            EntryResolution::InvalidRootOrHome(PathBuf::from("/home"))
+        );
+
+        // 6. Valid path under $HOME (not containing $HOME, not /)
+        assert_eq!(
+            resolve_entry(".cache", home, &lookup),
+            EntryResolution::Missing(PathBuf::from("/home/testuser/.cache"))
+        );
     }
 
     #[test]
