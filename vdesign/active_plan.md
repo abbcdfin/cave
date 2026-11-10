@@ -18,6 +18,6 @@ Decisions & rationale: `docs/architecture_design.md` › Toolchains, argument in
 - [x] 6.7.5 Mutation checks for 1a and 1b separately, recording which test catches each (1a: `test_toolchain_flutter_boundary_and_isolation` Case 5; 1b: Case 4).
 
 ## Slice 3: Documentation, Plan & Checkpoint Upkeep (Items 1a, 5, 6)
-- [ ] 6.8.1 Reconcile `docs/architecture_design.md` › Toolchains: document fatal exit 1 on `/`, `$HOME`, or ancestor containing `$HOME`, removing the previous claim of sharing `--dir` warnings.
-- [ ] 6.8.2 Correct `vdesign/plan.md` and `vdesign/checkpoint.md`: name `ExpansionLookup`, clarify `build_mount_plan` non-purity, clarify 0.75 ms startup measurement, reference proposal at `b5015eb`, keep Phase 6 as `[/]` awaiting device verification.
-- [ ] 6.8.3 Verify all tests pass (`cargo test`) and clippy is clean (`cargo clippy --all-targets -- -D warnings`).
+- [x] 6.8.1 Reconcile `docs/architecture_design.md` › Toolchains: document fatal exit 1 on `/`, `$HOME`, or ancestor containing `$HOME`, removing the previous claim of sharing `--dir` warnings.
+- [x] 6.8.2 Correct `vdesign/plan.md` and `vdesign/checkpoint.md`: name `ExpansionLookup`, clarify `build_mount_plan` non-purity, clarify 0.75 ms startup measurement, reference proposal at `b5015eb`, keep Phase 6 as `[/]` awaiting device verification.
+- [x] 6.8.3 Verify all tests pass (`cargo test`) and clippy is clean (`cargo clippy --all-targets -- -D warnings`).
