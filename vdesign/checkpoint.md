@@ -1,16 +1,18 @@
 # Checkpoint
 
 ## Current State
-- Phase 5 (SSH via the host ssh-agent) complete and collapsed into `vdesign/plan.md`:
-  - Host `ssh-agent` socket forwarded RO to `/run/user/$UID/ssh-agent.sock` (`0700` runtime directory permissions), `.ssh/config` and `.ssh/known_hosts` mounted RO, private keys (`~/.ssh/id_*`) hidden.
-  - `/etc/ssh/ssh_config.d` masked with a private `tmpfs` (`defaults.tmpfs` skips missing host paths via `p.exists()`), resolving OpenSSH `nobody`-owned drop-in rejection in rootless user namespaces.
-  - Single `policy::resolve_ssh_socket` used by `main.rs` and `--doctor`; `no_ssh` handled in `main.rs` only; `build_mount_plan` reads no config and no environment (it stats and canonicalizes paths on disk).
-  - `--doctor` verifies both `ssh -G github.com` and `ssh-add -l` inside a test sandbox.
-  - Live `ssh -T git@github.com`, `git ls-remote`, and scratch branch push/delete over SSH verified and confirmed.
-  - 25 unit tests and 20 boundary tests passing (45 total), 0 clippy warnings.
-- Phases 1–5 complete.
+- Phase 6 (Toolchains, `cave --with flutter`) complete and collapsed into `vdesign/plan.md`:
+  - Added `[toolchains.NAME]` configuration table beside `profiles` with `requires`, `rw_cache`, `runtime`, and `check_tcp` fields (`ToolchainConfig`, `UserToolchainConfig`, `TcpCheckConfig`). Layered in `merge_user_config` with append and move-between-lists rules.
+  - Repeatable `--with NAME` flag in `cli::parse_args` accepted for both execution and `--doctor`; unknown toolchain names exit 1.
+  - Mount order renders toolchains after the agent profile and before the working directory in `--with` argument order, with `rw_cache` mounts preceding `runtime` mounts. Pure function `build_mount_plan` creates no host paths.
+  - Pure entry expansion `policy::expand_entry` / `policy::expand_string` over `Lookup` trait (`SystemLookup`), canonicalizing binaries via `bwrap::which_binary` and normalizing `..` lexically. Unresolved `requires` entries exit 1 naming the toolchain and missing entry; other unresolved entries warn to stderr and are skipped. Resolved paths pass through `cli::check_warning`.
+  - Non-blocking TCP connectivity diagnostics via `policy::check_tcp_port` (`TcpStream::connect_timeout`). Measured startup overhead with `--with flutter` is 0.75 ms (budget < 100 ms).
+  - Built-in `[toolchains.flutter]` in `src/profiles.toml`. Verified secrets isolation (`~/.gradle/gradle.properties` and `~/.android/adbkey` hidden), host adb server guard refusal (`ADB_REJECT_KILL_SERVER=1` rejects inside `adb kill-server`), missing server warnings, and doctor diagnostics.
+  - 35 unit tests and 21 boundary tests passing (56 total), 0 clippy warnings. Mutation check on `requires` passed.
+  - Documentation and README reconciled, pending Phase 6 marks removed.
+- Phases 1–6 complete.
 
 ## Next Steps
-- Optional host housekeeping: move `ServerAliveInterval 120` from `/etc/ssh/ssh_config.d/50-general-client.conf` into `~/.ssh/config` if desired inside `cave`.
+- Connect a physical phone / emulator and test `cave --with flutter claude` / `flutter run` with hot reload if desired.
 - Publish `cave-git` to the AUR.
-- Build Phase 6 (Toolchains, `cave --with flutter`), accepted 2026-11-08: draft the board in `vdesign/active_plan.md` from `vdesign/plan.md` › Phase 6, then build it.
+- Review unnumbered candidates in `vdesign/plan.md` for next increment acceptance.
