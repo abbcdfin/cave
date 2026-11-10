@@ -1,20 +1,25 @@
 # Checkpoint
 
 ## Current State
-- Phase 6 (Toolchains, `cave --with flutter`) reopened for boundary hole fix and pending live device verification:
-  - Fixed boundary hole: Any toolchain entry that resolves to `/`, `$HOME`, or an ancestor directory containing `$HOME` is fatal, exiting 1 with an error naming the toolchain, entry, and resolved path (without `--dir` warning).
-  - Added sentinel `"${bin:flutter}/../../packages/flutter_tools"` to `[toolchains.flutter].requires` in `src/profiles.toml`, ensuring an isolated `flutter` binary outside an SDK exits 1 before anything is mounted.
-  - Unified resolver: Created `resolve_entry` and `resolve_toolchain` in `src/policy.rs` as the single source of truth for expansion, existence, and classification (`EntryResolution`), used by both `main.rs` and `run_doctor` (which prints `[FAIL]` on `InvalidRootOrHome`).
-  - Deleted dead helper functions `resolve_path_literal` and `resolve_literal_toolchain`.
-  - Updated `which_binary` in `src/bwrap.rs` to only search explicit `PATH` when set, avoiding host `/usr/bin` leakage in tests.
-  - Added unit test `test_resolve_entry_invalid_root_and_home` and boundary test cases in `tests/boundary_tests.rs` for 1a and 1b. Mutation checks verified separately for 1a (Case 5) and 1b (Case 4).
-  - Test suite: 36 unit tests and 21 boundary tests passing (57 total), 0 clippy warnings (`-D warnings`).
-  - Measured startup overhead: Total startup overhead for `cave --with flutter true` is 10.79 ms avg (min 9.65 ms); toolchain resolution adds ~0.75 ms vs base execution, well within the 100 ms budget.
-  - Reconciled `docs/architecture_design.md` › Toolchains.
-  - Plan / checkpoint corrections: Trait name is `ExpansionLookup`, `build_mount_plan` checks paths on disk and prints working directory warning, startup overhead clarified.
+- Phase 6 (Toolchains, `cave --with flutter`) complete and collapsed into `vdesign/plan.md`:
+  - Added `[toolchains.NAME]` configuration table beside `profiles` with `requires`, `rw_cache`, `runtime`, and `check_tcp` fields (`ToolchainConfig`, `UserToolchainConfig`, `TcpCheckConfig`). Layered in `merge_user_config` with append and move-between-lists rules.
+  - Repeatable `--with NAME` flag in `cli::parse_args` accepted for both execution and `--doctor`; unknown toolchain names exit 1.
+  - Toolchain mounts rendered after agent profile and before working directory in `--with` argument order, with `rw_cache` mounts preceding `runtime` mounts. `build_mount_plan` inspects candidate paths on disk and warns if `--dir` or working directory overrides root/home.
+  - Unified toolchain entry resolution and classification in `policy::resolve_entry` and `policy::resolve_toolchain` over `ExpansionLookup` trait (`SystemLookup`), canonicalizing binaries via `bwrap::which_binary` and normalizing `..` lexically without host `/usr/bin` leakage.
+  - Engine boundary protection: toolchain entries resolving to `/`, `$HOME`, or an ancestor containing `$HOME` exit 1 with a clear error without issuing `--dir` warnings. Unresolved `requires` entries exit 1 naming the missing requirement. Unresolvable or missing non-requires entries warn to stderr and are skipped.
+  - Startup TCP connectivity diagnostics via `policy::check_tcp_port` (`TcpStream::connect_timeout`). Total startup overhead with `--with flutter` measured at 10.79 ms avg (min 9.65 ms); toolchain resolution adds ~0.75 ms vs base execution (< 100 ms budget).
+  - Built-in `[toolchains.flutter]` in `src/profiles.toml` with `requires = ["${bin:flutter}", "${bin:flutter}/../../packages/flutter_tools"]`.
+  - Verified live on host:
+    - `cave --with flutter sh -c 'flutter doctor -v'` succeeded with exit code 0 finding all SDK and toolchain components with zero write errors on read-only paths.
+    - `cave --with flutter sh -c 'flutter build apk --debug'` succeeded in 14.3s, reusing Gradle caches from host build (38.9s).
+    - `cave --with flutter flutter run -d cbe5535f` connected to OnePlus 8T (`KB2000`), installed and started the app, and hot-reloaded modified `lib/main.dart` across the sandbox in 438ms.
+    - Host adb server guard refusal verified: `ADB_REJECT_KILL_SERVER=1 adb start-server` on host caused `adb kill-server` inside cave to be rejected (`error: kill-server rejected by remote server`), leaving host daemon alive.
+    - Secrets isolation verified: `~/.gradle/gradle.properties` and `~/.android/adbkey` are hidden (`No such file or directory`).
+    - `cave --doctor --with flutter` verified.
+  - 36 unit tests and 21 boundary tests passing (57 total), 0 clippy warnings (`-D warnings`). Separate mutation checks on 1a (Case 5) and 1b (Case 4) verified.
+  - Documentation, product spec, and README reconciled.
+- Phases 1–6 complete.
 
 ## Next Steps
-- Awaiting user live device verification on host:
-  1. `cave --with flutter sh -c 'cd /home/jian/workspace/sys-in/ble-mesh/raft_mesh_manager && flutter build apk --debug'`
-  2. `cave --with flutter sh -c 'cd /home/jian/workspace/sys-in/ble-mesh/raft_mesh_manager && flutter run'` (or under `cave --with flutter claude`) with hot reload on a connected phone.
-- Record live results as reported by user, mark Phase 6 `[x]`, and record verified outcome in `vdesign/plan.md`.
+- Publish `cave-git` to the AUR or tag a release.
+- Review unnumbered candidates in `vdesign/plan.md` for next increment acceptance.
