@@ -43,7 +43,7 @@ Linux only for now. Other platforms may follow.
 - Extra allowed directories are added with `--dir PATH` (read-write) or `--ro-dir PATH` (read-only), repeatable. Every allowed directory appears at its host path, so relative paths between them, absolute paths inside projects, and agent state keyed by path (`~/.claude/projects/<cwd>/`) all stay valid. There are no custom target paths. An explicitly allowed path overrides the default for that path: `--dir /tmp` shows the host's `/tmp`, and `--ro-dir .` makes the working directory read-only. cave warns on `--dir /` and `--dir ~`, which undo the boundary. A user config file (`~/.config/cave/profiles.toml`, layered with append semantics) adds paths permanently; it is user-global, never per-project, so the agent cannot reach the policy that confines it.
 - Toolchains are added with `--with NAME`, repeatable: `cave --with flutter claude`.
 - cave's own commands are options (`cave --doctor`), so no agent command name is reserved.
-- `cave --version` names the release and the exact commit the binary was built from (pending Phase 7).
+- `cave --version` names the release and the exact commit the binary was built from: `cave <version> (<describe>)`, or plain `cave <version>` without git metadata.
 
 ## Key Requirements
 

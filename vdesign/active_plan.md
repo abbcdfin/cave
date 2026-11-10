@@ -18,13 +18,13 @@ Decisions & rationale: `docs/architecture_design.md` › Packaging & Distributio
 - [x] 7.3.2 Verify test that `pkgver()` fails non-zero on a clone with no reachable tag.
 
 ## Slice 4: Tag, Push & Package Build Verification (Plan step 3)
-- [ ] 7.4.1 Create annotated tag `v0.2.0 -m "cave 0.2.0"` on the release commit.
-- [ ] 7.4.2 Ask user for approval to push `main` and `v0.2.0` to GitHub (`origin`).
-- [ ] 7.4.3 Upon user confirmation, push `main` and `v0.2.0`.
-- [ ] 7.4.4 Run `makepkg` in `packaging/arch/`. Verify package name is `cave-git-0.2.0.r…`, binary `--version` matches commit and has no `-dirty` suffix. Discard `PKGBUILD` pkgver rewrite via `git checkout packaging/arch/PKGBUILD`.
+- [x] 7.4.1 Create annotated tag `v0.2.0 -m "cave 0.2.0"` on the release commit.
+- [x] 7.4.2 Ask user for approval to push `main` and `v0.2.0` to GitHub (`origin`).
+- [x] 7.4.3 Upon user confirmation, push `main` and `v0.2.0`.
+- [x] 7.4.4 Run `makepkg` in `packaging/arch/`. Verify package name is `cave-git-0.2.0.r…`, binary `--version` matches commit and has no `-dirty` suffix. Discard `PKGBUILD` pkgver rewrite via `git checkout packaging/arch/PKGBUILD`.
 - [ ] 7.4.5 User installs with `sudo pacman -U …` and confirms no downgrade warning and matching commit.
 
 ## Slice 5: Documentation & Reconciliation (Plan step 4)
-- [ ] 7.5.1 Remove "pending Phase 7" marks in `docs/architecture_design.md` and `docs/product_specification.md`.
-- [ ] 7.5.2 Update `README.md` with version output explanation, release workflow steps, and discarding `makepkg` pkgver rewrite.
+- [x] 7.5.1 Remove "pending Phase 7" marks in `docs/architecture_design.md` and `docs/product_specification.md`.
+- [x] 7.5.2 Update `README.md` with version output explanation, release workflow steps, and discarding `makepkg` pkgver rewrite.
 - [ ] 7.5.3 All tests and clippy pass; record outcome in `vdesign/plan.md` and update `vdesign/checkpoint.md`.

@@ -51,6 +51,21 @@ cargo build --release
 install -Dm755 target/release/cave ~/.local/bin/cave
 ```
 
+### Versioning & Release Workflow
+
+- **Build Metadata**: `cave --version` names the build:
+  - Formatted as `cave <version> (<describe>)` (e.g. `cave 0.2.0 (v0.2.0-0-ge640705)`).
+  - Uncommitted changes append `-dirty`.
+  - Built from source without git metadata, it prints plain `cave <version>`.
+- **Packaging (`PKGBUILD`)**: Derives `pkgver()` dynamically via `git describe --long --tags` (`0.2.0.rN.gHASH`).
+- **Release Steps**:
+  1. Bump version in `Cargo.toml` and update `Cargo.lock` (`cargo check` or `cargo build`).
+  2. Commit `Cargo.toml` and `Cargo.lock`.
+  3. Create annotated tag: `git tag -a vX.Y.Z -m "cave X.Y.Z"`.
+  4. Push commit and tag: `git push origin main vX.Y.Z`.
+  5. Run `makepkg` in `packaging/arch/`.
+  6. Discard the `pkgver=` rewrite that `makepkg` leaves in `PKGBUILD`: `git checkout packaging/arch/PKGBUILD`.
+
 ## CLI Syntax
 
 ```bash
@@ -69,6 +84,7 @@ cave options must come before the agent command; everything from the agent comma
 | `cave --no-ssh <agent>` | Disables forwarding the host SSH agent socket for this session |
 | `cave --dir ../shared-lib claude` | Also allows read-write access to `../shared-lib` |
 | `cave --ro-dir ~/reference claude` | Also allows read-only access to `~/reference` |
+| `cave --version` | Prints version and build metadata |
 | `cave --doctor` | Inspects sandbox backend availability and permissions |
 
 ## Configuration
