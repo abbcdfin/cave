@@ -482,13 +482,18 @@ pub fn resolve_entry<L: ExpansionLookup + ?Sized>(
         home.join(expanded)
     };
     let normalized = normalize_path_lexical(&path);
-    if normalized == Path::new("/")
-        || home.starts_with(&normalized)
-        || fs::canonicalize(home)
-            .map(|ch| ch.starts_with(&normalized))
-            .unwrap_or(false)
-    {
-        return EntryResolution::InvalidRootOrHome(normalized);
+    let canonical_home = fs::canonicalize(home).ok();
+    let covers_home = |p: &Path| {
+        p == Path::new("/")
+            || home.starts_with(p)
+            || canonical_home.as_deref().is_some_and(|h| h.starts_with(p))
+    };
+    // Check the path as written and, when it exists, where it really points: a symlink to $HOME mounts $HOME
+    let real = fs::canonicalize(&normalized).ok();
+    for candidate in std::iter::once(&normalized).chain(real.as_ref()) {
+        if covers_home(candidate) {
+            return EntryResolution::InvalidRootOrHome(candidate.clone());
+        }
     }
     if normalized.exists() {
         EntryResolution::Found(normalized)
@@ -1441,6 +1446,38 @@ mod tests {
         assert_eq!(
             resolve_entry(".cache", home, &lookup),
             EntryResolution::Missing(PathBuf::from("/home/testuser/.cache"))
+        );
+    }
+
+    #[test]
+    fn test_resolve_entry_symlink_to_home_is_invalid() {
+        let dir = tempdir().unwrap();
+        let base = fs::canonicalize(dir.path()).unwrap();
+        let home = base.join("home");
+        let sdk = base.join("sdk");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(&sdk).unwrap();
+        std::os::unix::fs::symlink(&home, home.join("to_home")).unwrap();
+        std::os::unix::fs::symlink(&base, home.join("to_parent")).unwrap();
+        std::os::unix::fs::symlink(&sdk, home.join("to_sdk")).unwrap();
+        let lookup = MockLookup {
+            vars: HashMap::new(),
+            bins: HashMap::new(),
+        };
+
+        // The path as written is under $HOME, but it points at $HOME or above it
+        assert_eq!(
+            resolve_entry("to_home", &home, &lookup),
+            EntryResolution::InvalidRootOrHome(home.clone())
+        );
+        assert_eq!(
+            resolve_entry("to_parent", &home, &lookup),
+            EntryResolution::InvalidRootOrHome(base.clone())
+        );
+        // A symlink to an unrelated directory stays valid and mounts at the path as written
+        assert_eq!(
+            resolve_entry("to_sdk", &home, &lookup),
+            EntryResolution::Found(home.join("to_sdk"))
         );
     }
 
