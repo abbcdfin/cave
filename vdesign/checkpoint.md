@@ -21,5 +21,6 @@
 - Phases 1–6 complete.
 
 ## Next Steps
-- Publish `cave-git` to the AUR or tag a release.
+- Build Phase 7 (Versioning, `cave --version` names its build), accepted 2026-11-10: draft the board in `vdesign/active_plan.md` from `vdesign/plan.md` › Phase 7, then build it. It ends with release `v0.2.0`.
+- Publish `cave-git` to the AUR.
 - Review unnumbered candidates in `vdesign/plan.md` for next increment acceptance.

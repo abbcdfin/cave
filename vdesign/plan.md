@@ -33,6 +33,23 @@ Rationale: `docs/architecture_design.md` › Delivery Approach.
     - Startup overhead with `--with flutter` is measured and stays < 100 ms.
     - Unit tests for expansion and the new entry kinds; a boundary test with a fake toolchain on `PATH` (no real Flutter needed); a mutation check on `requires`. Tests and clippy (`-D warnings`) green.
     - `docs/architecture_design.md`, `docs/product_specification.md` and README match what was built.
+- [ ] Phase 7: Versioning — `cave --version` names its build
+  - Rationale: `docs/architecture_design.md` › Packaging & Distribution › Versioning. Accepted 2026-11-10.
+  - Plan, thin path first:
+    1. `build.rs` embeds `git describe --long --tags --dirty`; `cave --version` prints it after the `Cargo.toml` version, or the version alone without git metadata. Works before any tag exists (`--always` hash).
+    2. Release `0.2.0`: `Cargo.toml` to `0.2.0`; `pkgver()` without the hard-coded fallback; annotated tag `v0.2.0` on that commit, pushed together with it (the user approves the push).
+    3. Package build and host upgrade.
+    4. Reconcile design documents and README; remove the pending marks.
+  - Done when:
+    - `Cargo.toml` is the only file that states the release number; `pkgver()` has no hard-coded version.
+    - From the package, `cave --version` prints `cave 0.2.0 (v0.2.0-N-gHASH)` naming the same commit as `pacman -Q cave-git` (`0.2.0.rN.gHASH-1`).
+    - A local build of a tree with uncommitted changes ends in `-dirty`; after a commit, or an edit under `src/`, the next `cargo build` shows the new state without `cargo clean`.
+    - Built without git metadata (a source tree with no `.git`), `cave --version` prints `cave 0.2.0`, and the build does not fail.
+    - `pkgver()` on a clone with no reachable tag fails the build.
+    - Annotated tag `v0.2.0` points at the commit that sets `version = "0.2.0"`, and is on GitHub.
+    - On the host, `pacman -U` upgrades `cave-git` from `0.1.0.r35.gac678da-1` to `0.2.0.r…` without a downgrade warning (needs the user).
+    - A test pins the `--version` format; tests and clippy (`-D warnings`) green.
+    - `docs/architecture_design.md`, `docs/product_specification.md` and README match what was built, including the release steps (bump, commit, tag, push) and discarding `makepkg`'s `pkgver=` rewrite.
 
 ## Candidates
 <!-- Unnumbered DRAFT ideas awaiting validation -->
