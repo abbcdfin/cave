@@ -14,8 +14,8 @@ Decisions & rationale: `docs/architecture_design.md` › Packaging & Distributio
 - [x] 7.2.3 Verify rebuild behavior on commit / file edit without `cargo clean`, and verify graceful fallback to plain package version when `.git` is absent.
 
 ## Slice 3: Release 0.2.0 Bump & PKGBUILD Simplification (Plan step 2)
-- [ ] 7.3.1 In a single commit: update `Cargo.toml` to `version = "0.2.0"`, update `Cargo.lock`, and simplify `pkgver()` in `packaging/arch/PKGBUILD` to strictly use `git describe --long --tags | sed ...` with no hardcoded fallback.
-- [ ] 7.3.2 Verify test that `pkgver()` fails non-zero on a clone with no reachable tag.
+- [x] 7.3.1 In a single commit: update `Cargo.toml` to `version = "0.2.0"`, update `Cargo.lock`, and simplify `pkgver()` in `packaging/arch/PKGBUILD` to strictly use `git describe --long --tags | sed ...` with no hardcoded fallback.
+- [x] 7.3.2 Verify test that `pkgver()` fails non-zero on a clone with no reachable tag.
 
 ## Slice 4: Tag, Push & Package Build Verification (Plan step 3)
 - [ ] 7.4.1 Create annotated tag `v0.2.0 -m "cave 0.2.0"` on the release commit.
