@@ -33,7 +33,7 @@ Rationale: `docs/architecture_design.md` › Delivery Approach.
     - Startup overhead with `--with flutter` is measured and stays < 100 ms.
     - Unit tests for expansion and the new entry kinds; a boundary test with a fake toolchain on `PATH` (no real Flutter needed); a mutation check on `requires`. Tests and clippy (`-D warnings`) green.
     - `docs/architecture_design.md`, `docs/product_specification.md` and README match what was built.
-- [ ] Phase 7: Versioning — `cave --version` names its build
+- [/] Phase 7: Versioning — `cave --version` names its build
   - Rationale: `docs/architecture_design.md` › Packaging & Distribution › Versioning. Accepted 2026-11-10.
   - Plan, thin path first:
     1. `build.rs` embeds `git describe --long --tags --dirty`; `cave --version` prints it after the `Cargo.toml` version, or the version alone without git metadata. Works before any tag exists (`--always` hash).

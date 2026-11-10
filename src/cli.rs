@@ -196,8 +196,18 @@ Examples:
     );
 }
 
+pub fn format_version(pkg_version: &str, git_describe: Option<&str>) -> String {
+    match git_describe {
+        Some(desc) if !desc.trim().is_empty() => format!("cave {} ({})", pkg_version, desc.trim()),
+        _ => format!("cave {}", pkg_version),
+    }
+}
+
 pub fn print_version() {
-    println!("cave {}", env!("CARGO_PKG_VERSION"));
+    println!(
+        "{}",
+        format_version(env!("CARGO_PKG_VERSION"), option_env!("CAVE_GIT_DESCRIBE"))
+    );
 }
 
 pub fn run_doctor(with_toolchains: &[String]) -> bool {
@@ -595,6 +605,29 @@ pub fn run_doctor(with_toolchains: &[String]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_format_version() {
+        // Tagged describe
+        assert_eq!(
+            format_version("0.2.0", Some("v0.2.0-3-g1a2b3c4")),
+            "cave 0.2.0 (v0.2.0-3-g1a2b3c4)"
+        );
+        // Before first tag (hash only)
+        assert_eq!(
+            format_version("0.1.0", Some("ac678da")),
+            "cave 0.1.0 (ac678da)"
+        );
+        // With uncommitted changes (-dirty suffix)
+        assert_eq!(
+            format_version("0.2.0", Some("v0.2.0-3-g1a2b3c4-dirty")),
+            "cave 0.2.0 (v0.2.0-3-g1a2b3c4-dirty)"
+        );
+        // No git metadata (None)
+        assert_eq!(format_version("0.2.0", None), "cave 0.2.0");
+        // Empty git metadata (trimmed)
+        assert_eq!(format_version("0.2.0", Some("   ")), "cave 0.2.0");
+    }
 
     #[test]
     fn test_help_version_doctor() {

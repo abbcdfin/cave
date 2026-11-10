@@ -319,6 +319,23 @@ fn test_overrides_dir_tmp_and_ro_working_dir() {
 }
 
 #[test]
+fn test_cli_version_output() {
+    let cave_bin = env!("CARGO_BIN_EXE_cave");
+    let output = Command::new(cave_bin)
+        .arg("--version")
+        .output()
+        .expect("Failed to execute cave --version");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let expected_prefix = format!("cave {}", env!("CARGO_PKG_VERSION"));
+    assert!(
+        stdout.starts_with(&expected_prefix),
+        "Expected output to start with '{expected_prefix}', got: {stdout}"
+    );
+}
+
+#[test]
 fn test_environment_variables_sanitization() {
     let fixture = HermeticFixture::new();
     let script = r#"
