@@ -28,5 +28,5 @@
 - Phases 1–7 complete.
 
 ## Next Steps
+- Build Phase 8 (Multi-agent sessions, `cave --profile claude,codex,agy tmux`), accepted 2026-11-19: draft the board in `vdesign/active_plan.md` from `vdesign/plan.md` › Phase 8, then build it.
 - Publish `cave-git` to the AUR.
-- Review unnumbered candidates in `vdesign/plan.md` (including `--profile NAME` multi-agent sessions) for next increment acceptance.

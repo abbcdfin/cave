@@ -51,6 +51,23 @@ Rationale: `docs/architecture_design.md` › Delivery Approach.
     - On the host, `pacman -U` upgrades `cave-git` from `0.1.0.r35.gac678da-1` to `0.2.0.r…` without a downgrade warning (needs the user).
     - A test pins the `--version` format; tests and clippy (`-D warnings`) green.
     - `docs/architecture_design.md`, `docs/product_specification.md` and README match what was built, including the release steps (bump, commit, tag, push) and discarding `makepkg`'s `pkgver=` rewrite.
+- [ ] Phase 8: Multi-agent sessions — `cave --profile claude,codex,agy tmux`
+  - Rationale: `docs/architecture_design.md` › Filesystem & Environment Policy › Agent sessions. Accepted 2026-11-19.
+  - Plan, thin path first:
+    1. `--profile NAME`, repeatable and comma-separated, adds profiles to the command's own, each applied once; an unknown or empty name is fatal; no unknown-agent warning once `--profile` is given; built-in `codex` profile with a plain path.
+    2. Profile entries go through the toolchain resolver: expansions, absolute paths, the fatal `/` / `$HOME` check, a warning for an entry that does not resolve. Built-ins switch to `${CLAUDE_CONFIG_DIR:-.claude}`, `${bin:claude}/..` and `${CODEX_HOME:-.codex}`. Host state is created only after every entry has passed.
+    3. `--with` takes commas; `cave --doctor --profile NAME` prints the resolution.
+    4. Live check with the three agents; reconcile design documents and README.
+  - Done when:
+    - In one `cave --profile claude,codex,agy tmux` (or a shell), claude, codex and agy each start logged in and run a shell command in the working directory with the user's YOLO flag, and a session started inside is listed on the host afterwards (needs the user).
+    - `cave --profile codex claude` mounts claude's and codex's state; `--profile a,b` and `--profile a --profile b` give the same mount plan; a profile named twice, or by both the command and `--profile`, is mounted once; an unknown or empty name exits 1 before anything is created on the host. `--with` follows the same comma rules.
+    - The unknown-agent warning appears for `cave tmux` and not for `cave --profile claude tmux`.
+    - With no relocation variables set, `cave claude` and `cave agy` mount the same state paths as 0.2.0, and claude starts.
+    - `CODEX_HOME` or `CLAUDE_CONFIG_DIR` set elsewhere mounts, and if missing creates, that folder instead of the default. A value resolving to `/`, `$HOME` or a folder containing `$HOME`, as written or through a symlink, exits 1 naming the profile and the entry, and nothing is created on the host.
+    - A profile entry that does not resolve warns once and is skipped; a missing `runtime` path is skipped silently; a missing `state` path is created.
+    - `cave --doctor --profile NAME` shows each entry and what it resolved to.
+    - Unit and boundary tests cover the above, with mutation checks on the fatal `$HOME` case and on applying a profile once; tests and clippy (`-D warnings`) green; startup within the 100 ms budget.
+    - `docs/architecture_design.md`, `docs/product_specification.md` and README match what was built, including the cost of a shared session.
 
 ## Candidates
 <!-- Unnumbered DRAFT ideas awaiting validation -->
@@ -61,4 +78,3 @@ Rationale: `docs/architecture_design.md` › Delivery Approach.
 - Candidate: Opt-in Docker access for projects whose agents need `docker compose`; the socket is hidden by default (see `docs/product_specification.md` › Scope).
 - Candidate: `hide = [...]` class in the profile table, so a user file can remove an inherited default instead of only downgrading it. Deferred 2026-10-22 until a concrete need; it renders as a tmpfs mount, the mechanism that already hides `$HOME`.
 - Candidate: Per-project profile file (`./.cave/profiles.toml`) behind an explicit opt-in flag. Deferred 2026-10-22: the working directory is agent-writable, so the file could widen the boundary it defines.
-- Candidate: Multi-agent sessions through a repeatable `--profile NAME` (`cave --profile claude --profile codex --profile agy tmux`). When given, it replaces selection by command basename, which also fixes agents launched through wrappers (`cave npx @anthropic-ai/claude-code`, `cave uv run aider` select `npx` / `uv`). Profile entries take the toolchain entry rules: `${VAR:-default}` and `${bin:NAME}` probes falling back to the built-in path (`${CODEX_HOME:-.codex}`, `${CLAUDE_CONFIG_DIR:-.claude}`, `${bin:claude}/..`), `requires`, and the fatal `/` / `$HOME` check. Adds a built-in `codex` profile. Kept separate from `--with` (decided 2026-11-08): `--profile` chooses agents, `--with` adds toolchains. Cost: agents in one session can read and change each other's logins and settings. Discovering state paths by watching the agent run was rejected (2026-11-19): it would also mount what the agent merely read, such as `~/.ssh` keys.
