@@ -80,16 +80,25 @@ cave options must come before the agent command; everything from the agent comma
 | :--- | :--- |
 | `cave claude --dangerously-skip-permissions` | Runs Claude Code in YOLO mode, sandboxed to the CWD |
 | `cave <agent>` | Runs the specified agent command inside the isolated environment |
-| `cave --with <toolchain> <agent>` | Adds a project toolchain (e.g. `flutter`) to the session (repeatable) |
+| `cave --profile <names> <cmd>` | Adds agent profiles (e.g. `claude,codex,agy`) beside the command (repeatable, comma-separated) |
+| `cave --with <toolchain> <agent>` | Adds a project toolchain (e.g. `flutter`) to the session (repeatable, comma-separated) |
 | `cave --no-ssh <agent>` | Disables forwarding the host SSH agent socket for this session |
 | `cave --dir ../shared-lib claude` | Also allows read-write access to `../shared-lib` |
 | `cave --ro-dir ~/reference claude` | Also allows read-only access to `~/reference` |
 | `cave --version` | Prints version and build metadata |
-| `cave --doctor` | Inspects sandbox backend availability and permissions |
+| `cave --doctor` | Inspects sandbox backend availability and diagnostics (`--profile`, `--with`) |
 
 ## Configuration
 
-`cave` works out of the box with embedded profiles for supported agents (`claude`, `agy`, `aider`, `sh`, `bash`, `zsh`).
+`cave` works out of the box with embedded profiles for supported agents (`claude`, `codex`, `agy`, `aider`, `sh`, `bash`, `zsh`).
+
+### Multi-Agent Sessions (`--profile NAME`)
+
+Run multiple agents together (e.g. `cave --profile claude,codex,agy tmux` or `sh`) or launch wrapped agents (`cave --profile claude npx @anthropic-ai/claude-code`):
+
+- **Additive & Ordered**: The command's own profile (if any) mounts first, followed by `--profile` names in order. `--profile` is repeatable and comma-separated (`--profile a,b` equals `--profile a --profile b`); each profile is mounted once. Unknown or empty names exit 1.
+- **Relocation Support**: Built-in entries honor relocation variables (`${CLAUDE_CONFIG_DIR:-.claude}` and `${bin:claude}/..` for `claude`; `${CODEX_HOME:-.codex}` for `codex`). Values resolving to `/`, `$HOME`, or a folder containing `$HOME` exit 1 before anything is created on the host.
+- **Cost**: Agents running in the same shared session can read and modify each other's logins and settings; under the clumsy-agent threat model, one agent can damage another's configuration. Run separate `cave` sessions on the same project when agents do not need to share a session.
 
 ### SSH Agent Forwarding
 
@@ -148,9 +157,13 @@ runtime = [".config/myagent/config.json"]  # Read-only configuration
 [[profiles.myagent.state]]
 path = ".myagent"                          # Read-write state directory
 kind = "dir"
+
+# Override a built-in probed entry by matching its exact written text (not ".codex"):
+# [profiles.codex]
+# runtime = ["${CODEX_HOME:-.codex}"]
 ```
 
-- **Layering**: User configuration appends to embedded defaults. Re-declaring an existing path moves it to the new class (e.g., downgrading `.cache` to `ro_home` makes it read-only).
+- **Layering**: User configuration appends to embedded defaults. Re-declaring an existing path moves it to the new class (e.g., downgrading `.cache` to `ro_home` makes it read-only). Matching compares entries by the text as written (e.g. `"${CODEX_HOME:-.codex}"`), not the resolved path.
 - **Isolation**: `~/.config/cave/` is hidden by default (since `$HOME` is an empty private tmpfs without `.config` mounted). It is visible only if you explicitly mount a parent directory (e.g. `--dir ~/.config`).
 - **Diagnostics**: Run `cave --doctor` to inspect loaded configuration sources and the effective merged table.
 

@@ -25,8 +25,14 @@
   - Verified host `pacman -U` upgrade from `0.1.0.r35.gac678da-1` with no downgrade warning; `pacman -Q cave-git` (`0.2.0.r0.ge640705-1`) and `cave --version` (`cave 0.2.0 (v0.2.0-0-ge640705)`) match.
   - 38 unit tests and 22 boundary tests passing (60 total), 0 clippy warnings (`-D warnings`).
   - Reconciled `docs/architecture_design.md`, `docs/product_specification.md`, and `README.md`.
-- Phases 1–7 complete.
+- Phase 8 (Multi-agent sessions, `cave --profile claude,codex,agy tmux`) complete and collapsed into `vdesign/plan.md`:
+  - Added repeatable, comma-separated `--profile NAME` and `--with NAME` via `cli::parse_name_list` (no trimming, empty names fatal via `CliError::EmptyName`), `policy::select_profiles` (command profile first then `--profile` in order, each applied once), and unknown-agent warning emitted only when `opts.profiles.is_empty()`.
+  - Unified profile and toolchain entry resolution via `policy::resolve_entry` (`resolve_profile`, `resolve_toolchain`, `ResolvedProfile`) with explicit `MissingBehavior` (`Fatal`, `WarnAndSkip`, `Create`, `SkipSilently`) checked in `main.rs` before `prepare_host_state(&resolved_profiles)` and `build_mount_plan(..., &resolved_profiles, &resolved_toolchains)`.
+  - Added `[profiles.codex]` (`${CODEX_HOME:-.codex}`), updated `[profiles.claude]` (`${CLAUDE_CONFIG_DIR:-.claude}`, `.claude.json`, `${bin:claude}/..`), kept `agy` unchanged, and added `--profile` diagnostics to `cli::run_doctor` via shared `print_doctor_entry`.
+  - Live verified on host (`cave --profile claude,codex,agy sh` with `claude`, `codex`, and `agy` logged in, running shell commands, and resuming sessions on host afterwards). Measured release three-profile startup overhead at 4.56 ms avg (+3.75 ms vs bare `true`, < 100 ms budget).
+  - 43 unit tests and 23 boundary tests passing (66 total), 0 clippy warnings (`-D warnings`), mutation checks on applying a profile once and fatal `$HOME` verified, and `docs/` + `README.md` reconciled.
+- Phases 1–8 complete.
 
 ## Next Steps
-- Build Phase 8 (Multi-agent sessions, `cave --profile claude,codex,agy tmux`), accepted 2026-11-19: draft the board in `vdesign/active_plan.md` from `vdesign/plan.md` › Phase 8, then build it.
 - Publish `cave-git` to the AUR.
+- Review unnumbered candidates in `vdesign/plan.md` for next increment acceptance.
