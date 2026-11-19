@@ -35,11 +35,11 @@ tmpfs = [
 
 [profiles.claude]
 runtime = [
-    ".local/share/claude"
+    "${bin:claude}/.."
 ]
 
 [[profiles.claude.state]]
-path = ".claude"
+path = "${CLAUDE_CONFIG_DIR:-.claude}"
 kind = "dir"
 
 [[profiles.claude.state]]
@@ -67,7 +67,7 @@ kind = "dir"
 runtime = []
 
 [[profiles.codex.state]]
-path = ".codex"
+path = "${CODEX_HOME:-.codex}"
 kind = "dir"
 
 [profiles.sh]

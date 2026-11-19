@@ -43,7 +43,22 @@ impl HermeticFixture {
 
         // Initialize declared claude state using policy::prepare_host_state
         let default_config = cave::policy::load_config();
-        cave::policy::prepare_host_state(&["claude".to_string()], &fake_home, &default_config).unwrap();
+        struct EmptyLookup;
+        impl cave::policy::ExpansionLookup for EmptyLookup {
+            fn lookup_var(&self, _var: &str) -> Option<String> {
+                None
+            }
+            fn lookup_bin(&self, _bin: &str) -> Option<PathBuf> {
+                None
+            }
+        }
+        let claude_report = cave::policy::resolve_profile(
+            "claude",
+            &default_config.profiles["claude"],
+            &fake_home,
+            &EmptyLookup,
+        );
+        cave::policy::prepare_host_state(&[claude_report.to_resolved_profile()]).unwrap();
 
         let cache_dir = fake_home.join(".cache");
         fs::create_dir_all(&cache_dir).unwrap();
@@ -132,6 +147,8 @@ impl HermeticFixture {
             .env("HOME", &self.fake_home)
             .env_remove("XDG_CONFIG_HOME")
             .env_remove("SSH_AUTH_SOCK")
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("CODEX_HOME")
             .env("TEST_HOST_VAR", "preserved_value")
             .env("DBUS_SESSION_BUS_ADDRESS", "unix:path=/tmp/fake_dbus");
 
@@ -1254,6 +1271,126 @@ fn test_multi_profile_session() {
             "Host state must not be created when --profile '{bad_arg}' fails"
         );
     }
+
+    // 4. Trap 4 & 8: CODEX_HOME=$HOME exits 1 naming profile & entry and creates NOTHING on host
+    // (no ~/.claude.json, no ~/.claude, no ~/.codex).
+    let fresh_home_fatal = fixture._temp_dir.path().join("fresh_home_fatal");
+    fs::create_dir_all(&fresh_home_fatal).unwrap();
+    let canary_fatal = fixture._temp_dir.path().join("canary_fatal_ran");
+    let out_fatal = Command::new(cave_bin)
+        .args(["--profile", "claude,codex", "sh", "-c"])
+        .arg(format!("touch '{}'", canary_fatal.display()))
+        .current_dir(&fixture.working_dir)
+        .env("HOME", &fresh_home_fatal)
+        .env("CODEX_HOME", &fresh_home_fatal)
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .env_remove("XDG_CONFIG_HOME")
+        .output()
+        .expect("Failed to execute cave");
+    assert_eq!(out_fatal.status.code(), Some(1));
+    let stderr_fatal = String::from_utf8_lossy(&out_fatal.stderr);
+    assert!(
+        stderr_fatal.contains("profile 'codex'") && stderr_fatal.contains("${CODEX_HOME:-.codex}"),
+        "Expected fatal error naming profile 'codex' and '${{CODEX_HOME:-.codex}}', got: {stderr_fatal}"
+    );
+    assert!(!canary_fatal.exists(), "Command must never run on fatal profile entry");
+    assert!(
+        !fresh_home_fatal.join(".claude.json").exists()
+            && !fresh_home_fatal.join(".claude").exists()
+            && !fresh_home_fatal.join(".codex").exists(),
+        "Host state must not be created before fatal profile checks pass"
+    );
+
+    // 5. Relocation variables (CODEX_HOME, CLAUDE_CONFIG_DIR) create & mount relocated folders instead of defaults,
+    // and ${bin:claude}/.. mounts the resolved versions folder read-only.
+    let relocated_home = fixture._temp_dir.path().join("relocated_home");
+    fs::create_dir_all(&relocated_home).unwrap();
+    let fake_versions_dir = fixture._temp_dir.path().join("claude_pkg").join("versions");
+    fs::create_dir_all(&fake_versions_dir).unwrap();
+    let real_claude_bin = fake_versions_dir.join("2.1.0");
+    fs::write(&real_claude_bin, "#!/bin/sh\nexit 0\n").unwrap();
+    fs::write(fake_versions_dir.join("version_marker.txt"), "2.1.0").unwrap();
+    let claude_path_dir = fixture._temp_dir.path().join("claude_path_bin");
+    fs::create_dir_all(&claude_path_dir).unwrap();
+    symlink(&real_claude_bin, claude_path_dir.join("claude")).unwrap();
+    let claude_test_path = format!(
+        "{}:{}",
+        claude_path_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+
+    let custom_claude_dir = relocated_home.join("alt_claude");
+    let custom_codex_dir = relocated_home.join("alt_codex");
+    let out_reloc = Command::new(cave_bin)
+        .args(["--profile", "claude,codex", "sh", "-c"])
+        .arg(format!(
+            r#"
+            set -eu
+            echo "ok" > "$CLAUDE_CONFIG_DIR/c.txt"
+            echo "ok" > "$CODEX_HOME/x.txt"
+            if [ -e "$HOME/.claude" ] || [ -e "$HOME/.codex" ]; then
+                echo "Default state dir should not exist when relocated"
+                exit 1
+            fi
+            test -f "{}/version_marker.txt"
+            if touch "{}/ro_check" 2>/dev/null; then
+                echo "claude runtime should be read-only"
+                exit 1
+            fi
+            echo "__SENTINEL_DONE__"
+            "#,
+            fake_versions_dir.display(),
+            fake_versions_dir.display()
+        ))
+        .current_dir(&fixture.working_dir)
+        .env("HOME", &relocated_home)
+        .env("PATH", &claude_test_path)
+        .env("CLAUDE_CONFIG_DIR", &custom_claude_dir)
+        .env("CODEX_HOME", &custom_codex_dir)
+        .env_remove("XDG_CONFIG_HOME")
+        .output()
+        .expect("Failed to execute cave");
+    assert!(
+        out_reloc.status.success(),
+        "Relocation test failed: stderr={}",
+        String::from_utf8_lossy(&out_reloc.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out_reloc.stdout).contains("__SENTINEL_DONE__"));
+    assert!(custom_claude_dir.join("c.txt").exists());
+    assert!(custom_codex_dir.join("x.txt").exists());
+    assert!(!relocated_home.join(".claude").exists());
+    assert!(!relocated_home.join(".codex").exists());
+
+    // 6. Optional missing runtime path (e.g. .aider.conf.yml absent) skips silently without warning;
+    // unresolvable entry warns once and skips.
+    let quiet_home = fixture._temp_dir.path().join("quiet_home");
+    fs::create_dir_all(quiet_home.join(".config").join("cave")).unwrap();
+    fs::write(
+        quiet_home.join(".config/cave/profiles.toml"),
+        r#"
+[profiles.aider]
+runtime = ["${UNSET_OPTIONAL_VAR}/cfg"]
+"#,
+    )
+    .unwrap();
+    let out_aider_quiet = Command::new(cave_bin)
+        .args(["--profile", "aider", "sh", "-c", "true"])
+        .current_dir(&fixture.working_dir)
+        .env("HOME", &quiet_home)
+        .env_remove("UNSET_OPTIONAL_VAR")
+        .env_remove("XDG_CONFIG_HOME")
+        .output()
+        .expect("Failed to execute cave");
+    assert!(out_aider_quiet.status.success());
+    let stderr_aider = String::from_utf8_lossy(&out_aider_quiet.stderr);
+    assert!(
+        !stderr_aider.contains(".aider.conf.yml"),
+        "Missing runtime .aider.conf.yml should skip silently, got: {stderr_aider}"
+    );
+    assert!(
+        stderr_aider.contains("Warning: profile 'aider' entry '${UNSET_OPTIONAL_VAR}/cfg' does not resolve; skipping."),
+        "Unresolvable profile entry should warn once, got: {stderr_aider}"
+    );
 }
 
 

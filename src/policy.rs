@@ -69,6 +69,20 @@ pub struct ResolvedToolchain {
     pub runtime: Vec<PathBuf>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedStateEntry {
+    pub path: PathBuf,
+    pub kind: String,
+    pub init: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedProfile {
+    pub name: String,
+    pub state: Vec<ResolvedStateEntry>,
+    pub runtime: Vec<PathBuf>,
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct ConfigData {
     pub defaults: DefaultsConfig,
@@ -288,24 +302,17 @@ pub fn select_profiles(
 
 /// Explicit host side-effect step: ensures declared state files/directories exist
 /// before mounting so they can persist, seeding files with valid initial content.
-pub fn prepare_host_state(
-    selected_profiles: &[String],
-    home_dir: &Path,
-    config: &ConfigData,
-) -> std::io::Result<()> {
-    for name in selected_profiles {
-        if let Some(profile) = config.profiles.get(name) {
-            for entry in &profile.state {
-                let target = home_dir.join(&entry.path);
-                if !target.exists() {
-                    if entry.kind == "dir" {
-                        fs::create_dir_all(&target)?;
-                    } else if entry.kind == "file" {
-                        if let Some(parent) = target.parent() {
-                            fs::create_dir_all(parent)?;
-                        }
-                        fs::write(&target, entry.init.as_deref().unwrap_or(""))?;
+pub fn prepare_host_state(resolved_profiles: &[ResolvedProfile]) -> std::io::Result<()> {
+    for profile in resolved_profiles {
+        for entry in &profile.state {
+            if !entry.path.exists() {
+                if entry.kind == "dir" {
+                    fs::create_dir_all(&entry.path)?;
+                } else if entry.kind == "file" {
+                    if let Some(parent) = entry.path.parent() {
+                        fs::create_dir_all(parent)?;
                     }
+                    fs::write(&entry.path, entry.init.as_deref().unwrap_or(""))?;
                 }
             }
         }
@@ -458,10 +465,109 @@ pub enum EntryResolution {
     InvalidRootOrHome(PathBuf),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MissingBehavior {
+    /// Unresolved or missing on disk is fatal (toolchain `requires`).
+    Fatal,
+    /// Unresolved or missing on disk warns once and is skipped (toolchain `rw_cache`, `runtime`).
+    WarnAndSkip,
+    /// Unresolved warns once and is skipped; missing on disk is valid and created (profile `state`).
+    Create,
+    /// Unresolved warns once and is skipped; missing on disk is skipped silently (profile `runtime`).
+    SkipSilently,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedToolchainEntry {
     pub raw: String,
     pub status: EntryResolution,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedProfileStateEntry {
+    pub raw: String,
+    pub kind: String,
+    pub init: Option<String>,
+    pub status: EntryResolution,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProfileResolutionReport {
+    pub name: String,
+    pub state: Vec<ResolvedProfileStateEntry>,
+    pub runtime: Vec<ResolvedToolchainEntry>,
+}
+
+impl ProfileResolutionReport {
+    pub fn to_resolved_profile(&self) -> ResolvedProfile {
+        ResolvedProfile {
+            name: self.name.clone(),
+            state: self
+                .state
+                .iter()
+                .filter_map(|e| match &e.status {
+                    EntryResolution::Found(p) | EntryResolution::Missing(p) => {
+                        Some(ResolvedStateEntry {
+                            path: p.clone(),
+                            kind: e.kind.clone(),
+                            init: e.init.clone(),
+                        })
+                    }
+                    EntryResolution::Unresolved | EntryResolution::InvalidRootOrHome(_) => None,
+                })
+                .collect(),
+            runtime: self
+                .runtime
+                .iter()
+                .filter_map(|e| match &e.status {
+                    EntryResolution::Found(p) => Some(p.clone()),
+                    EntryResolution::Missing(_)
+                    | EntryResolution::Unresolved
+                    | EntryResolution::InvalidRootOrHome(_) => None,
+                })
+                .collect(),
+        }
+    }
+}
+
+pub fn validate_entry_status(
+    owner_kind: &str,
+    owner_name: &str,
+    raw: &str,
+    status: &EntryResolution,
+    missing: MissingBehavior,
+    warnings: &mut Vec<String>,
+) -> Result<(), String> {
+    match status {
+        EntryResolution::Found(_) => Ok(()),
+        EntryResolution::InvalidRootOrHome(p) => Err(format!(
+            "Error: {owner_kind} '{owner_name}' entry '{raw}' resolves to '{}', which is invalid (cannot mount /, $HOME, or a folder containing $HOME).",
+            p.display()
+        )),
+        EntryResolution::Unresolved => match missing {
+            MissingBehavior::Fatal => Err(format!(
+                "Error: {owner_kind} '{owner_name}' requires '{raw}', which could not be found."
+            )),
+            MissingBehavior::WarnAndSkip | MissingBehavior::Create | MissingBehavior::SkipSilently => {
+                warnings.push(format!(
+                    "Warning: {owner_kind} '{owner_name}' entry '{raw}' does not resolve; skipping."
+                ));
+                Ok(())
+            }
+        },
+        EntryResolution::Missing(_) => match missing {
+            MissingBehavior::Fatal => Err(format!(
+                "Error: {owner_kind} '{owner_name}' requires '{raw}', which could not be found."
+            )),
+            MissingBehavior::WarnAndSkip => {
+                warnings.push(format!(
+                    "Warning: {owner_kind} '{owner_name}' entry '{raw}' does not resolve; skipping."
+                ));
+                Ok(())
+            }
+            MissingBehavior::Create | MissingBehavior::SkipSilently => Ok(()),
+        },
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -571,6 +677,39 @@ pub fn resolve_toolchain<L: ExpansionLookup + ?Sized>(
     }
 }
 
+pub fn resolve_profile<L: ExpansionLookup + ?Sized>(
+    name: &str,
+    profile: &AgentProfileConfig,
+    home: &Path,
+    lookup: &L,
+) -> ProfileResolutionReport {
+    let state = profile
+        .state
+        .iter()
+        .map(|entry| ResolvedProfileStateEntry {
+            raw: entry.path.clone(),
+            kind: entry.kind.clone(),
+            init: entry.init.clone(),
+            status: resolve_entry(&entry.path, home, lookup),
+        })
+        .collect();
+
+    let runtime = profile
+        .runtime
+        .iter()
+        .map(|entry| ResolvedToolchainEntry {
+            raw: entry.clone(),
+            status: resolve_entry(entry, home, lookup),
+        })
+        .collect();
+
+    ProfileResolutionReport {
+        name: name.to_string(),
+        state,
+        runtime,
+    }
+}
+
 /// Pure policy function: builds ordered mount plan without mutating the host filesystem or reading environment/config.
 #[allow(clippy::too_many_arguments)]
 pub fn build_mount_plan(
@@ -580,7 +719,7 @@ pub fn build_mount_plan(
     uid: u32,
     config: &ConfigData,
     ssh_socket: Option<&Path>,
-    selected_profiles: &[String],
+    resolved_profiles: &[ResolvedProfile],
     toolchains: &[ResolvedToolchain],
 ) -> MountPlan {
     let mut mounts = Vec::new();
@@ -673,29 +812,25 @@ pub fn build_mount_plan(
     }
 
     // 8. Agent Profiles (command's profile first, then --profile in order)
-    for name in selected_profiles {
-        if let Some(profile) = config.profiles.get(name) {
-            // State paths (Read-Write)
-            for entry in &profile.state {
-                let p = home_dir.join(&entry.path);
-                if p.exists() {
-                    mounts.push(MountEntry {
-                        host_path: Some(p.clone()),
-                        target_path: p,
-                        kind: MountKind::BindReadWrite,
-                    });
-                }
+    for profile in resolved_profiles {
+        // State paths (Read-Write)
+        for entry in &profile.state {
+            if entry.path.exists() {
+                mounts.push(MountEntry {
+                    host_path: Some(entry.path.clone()),
+                    target_path: entry.path.clone(),
+                    kind: MountKind::BindReadWrite,
+                });
             }
-            // Runtime paths (Read-Only) - rendered after state so an RO subpath inside an RW state dir overrides it
-            for rel in &profile.runtime {
-                let p = home_dir.join(rel);
-                if p.exists() {
-                    mounts.push(MountEntry {
-                        host_path: Some(p.clone()),
-                        target_path: p,
-                        kind: MountKind::BindReadOnly,
-                    });
-                }
+        }
+        // Runtime paths (Read-Only) - rendered after state so an RO subpath inside an RW state dir overrides it
+        for p in &profile.runtime {
+            if p.exists() {
+                mounts.push(MountEntry {
+                    host_path: Some(p.clone()),
+                    target_path: p.clone(),
+                    kind: MountKind::BindReadOnly,
+                });
             }
         }
     }
@@ -819,7 +954,12 @@ mod tests {
         // Initially absent
         assert!(!home.join(".claude").exists());
         let config = load_config();
-        prepare_host_state(&["claude".to_string()], &home, &config).unwrap();
+        let lookup = MockLookup {
+            vars: HashMap::new(),
+            bins: HashMap::new(),
+        };
+        let report = resolve_profile("claude", &config.profiles["claude"], &home, &lookup);
+        prepare_host_state(&[report.to_resolved_profile()]).unwrap();
 
         // .claude is created as dir
         assert!(home.join(".claude").is_dir());
@@ -847,8 +987,14 @@ mod tests {
         };
 
         let config = load_config();
+        let lookup = MockLookup {
+            vars: HashMap::new(),
+            bins: HashMap::new(),
+        };
+        let resolved = resolve_profile("claude", &config.profiles["claude"], &home, &lookup)
+            .to_resolved_profile();
         // Calling build_mount_plan does not create missing files on host
-        let _plan = build_mount_plan(&opts, &home, &cwd, 1000, &config, None, &["claude".to_string()], &[]);
+        let _plan = build_mount_plan(&opts, &home, &cwd, 1000, &config, None, &[resolved], &[]);
         assert!(!home.join(".claude").exists());
         assert!(!home.join(".claude.json").exists());
     }
@@ -875,7 +1021,9 @@ mod tests {
         };
 
         let config = load_config();
-        let plan = build_mount_plan(&opts, &home, &cwd, 1000, &config, None, &["sh".to_string()], &[]);
+        let sh_profile = resolve_profile("sh", &config.profiles["sh"], &home, &SystemLookup)
+            .to_resolved_profile();
+        let plan = build_mount_plan(&opts, &home, &cwd, 1000, &config, None, &[sh_profile], &[]);
 
         let canonical_cwd = fs::canonicalize(&cwd).unwrap();
         let canonical_sub = fs::canonicalize(&sub).unwrap();
@@ -1004,7 +1152,11 @@ mod tests {
 
         let config = load_effective_config(home).expect("effective config loads");
         let selected = select_profiles(&opts.agent_cmd, &opts.profiles, &config).unwrap();
-        let plan = build_mount_plan(&opts, home, &cwd, 1000, &config, None, &selected, &[]);
+        let resolved: Vec<_> = selected
+            .iter()
+            .map(|n| resolve_profile(n, &config.profiles[n], home, &SystemLookup).to_resolved_profile())
+            .collect();
+        let plan = build_mount_plan(&opts, home, &cwd, 1000, &config, None, &resolved, &[]);
 
         let mut state_idx = None;
         let mut runtime_idx = None;
@@ -1287,7 +1439,9 @@ mod tests {
 
         let report = resolve_toolchain("mytool", &config.toolchains["mytool"], &home, &SystemLookup);
         let resolved_tc = report.to_resolved_toolchain();
-        let plan = build_mount_plan(&opts, &home, &cwd, 1000, &config, None, &["sh".to_string()], &[resolved_tc]);
+        let sh_profile = resolve_profile("sh", &config.profiles["sh"], &home, &SystemLookup)
+            .to_resolved_profile();
+        let plan = build_mount_plan(&opts, &home, &cwd, 1000, &config, None, &[sh_profile], &[resolved_tc]);
 
         // Toolchain rw_cache mounted as BindReadWrite
         let cache_idx = plan
@@ -1625,13 +1779,21 @@ mod tests {
             profiles: vec!["codex".into(), "claude".into()],
         };
         let selected = select_profiles(&opts.agent_cmd, &opts.profiles, &config).unwrap();
-        prepare_host_state(&selected, &home, &config).unwrap();
+        let lookup = MockLookup {
+            vars: HashMap::new(),
+            bins: HashMap::new(),
+        };
+        let resolved: Vec<_> = selected
+            .iter()
+            .map(|n| resolve_profile(n, &config.profiles[n], &home, &lookup).to_resolved_profile())
+            .collect();
+        prepare_host_state(&resolved).unwrap();
 
         assert!(home.join(".claude").is_dir());
         assert!(home.join(".claude.json").is_file());
         assert!(home.join(".codex").is_dir());
 
-        let plan = build_mount_plan(&opts, &home, &cwd, 1000, &config, None, &selected, &[]);
+        let plan = build_mount_plan(&opts, &home, &cwd, 1000, &config, None, &resolved, &[]);
 
         let claude_mounts: Vec<_> = plan
             .mounts
@@ -1649,6 +1811,144 @@ mod tests {
         assert!(
             claude_mounts[0].0 < codex_idx,
             "command profile (claude) must mount before --profile (codex)"
+        );
+    }
+
+    #[test]
+    fn test_profile_resolution_uses_resolve_entry_and_missing_behaviors() {
+        let dir = tempdir().unwrap();
+        let base = fs::canonicalize(dir.path()).unwrap();
+        let home = base.join("home");
+        fs::create_dir_all(&home).unwrap();
+        std::os::unix::fs::symlink(&home, home.join("link_to_home")).unwrap();
+
+        let existing_runtime = home.join(".existing_runtime");
+        fs::create_dir_all(&existing_runtime).unwrap();
+
+        let profile = AgentProfileConfig {
+            state: vec![
+                StateEntry {
+                    path: "${CUSTOM_STATE:-.default_state}".into(),
+                    kind: "dir".into(),
+                    init: None,
+                },
+                StateEntry {
+                    path: "${UNSET_REQUIRED_VAR}/state".into(),
+                    kind: "dir".into(),
+                    init: None,
+                },
+            ],
+            runtime: vec![
+                ".existing_runtime".into(),
+                ".optional_missing_runtime".into(),
+                "${bin:missing_bin}/..".into(),
+            ],
+        };
+
+        let mut vars = HashMap::new();
+        vars.insert("CUSTOM_STATE".to_string(), "relocated_state".to_string());
+        let lookup = MockLookup {
+            vars,
+            bins: HashMap::new(),
+        };
+
+        let report = resolve_profile("custom", &profile, &home, &lookup);
+        let mut warnings = Vec::new();
+        for s in &report.state {
+            validate_entry_status(
+                "profile",
+                &report.name,
+                &s.raw,
+                &s.status,
+                MissingBehavior::Create,
+                &mut warnings,
+            )
+            .unwrap();
+        }
+        for r in &report.runtime {
+            validate_entry_status(
+                "profile",
+                &report.name,
+                &r.raw,
+                &r.status,
+                MissingBehavior::SkipSilently,
+                &mut warnings,
+            )
+            .unwrap();
+        }
+
+        // Only unresolved entries emit a warning; missing state & missing runtime do not warn.
+        assert_eq!(warnings.len(), 2);
+        assert!(warnings[0].contains("${UNSET_REQUIRED_VAR}/state"));
+        assert!(warnings[1].contains("${bin:missing_bin}/.."));
+
+        let resolved = report.to_resolved_profile();
+        // Missing state entry is kept so prepare_host_state creates it; unresolved is skipped.
+        assert_eq!(resolved.state.len(), 1);
+        assert_eq!(resolved.state[0].path, home.join("relocated_state"));
+        // Only existing runtime is mounted; missing runtime skipped silently.
+        assert_eq!(resolved.runtime, vec![existing_runtime]);
+
+        // Fatal InvalidRootOrHome checks: direct $HOME, /, ancestor /home, and symlink to $HOME
+        let dangerous_vars = [
+            home.to_string_lossy().to_string(),
+            "/".to_string(),
+            base.to_string_lossy().to_string(),
+            home.join("link_to_home").to_string_lossy().to_string(),
+        ];
+        for bad_val in dangerous_vars {
+            let mut bad_vars = HashMap::new();
+            bad_vars.insert("CODEX_HOME".to_string(), bad_val.clone());
+            let bad_lookup = MockLookup {
+                vars: bad_vars,
+                bins: HashMap::new(),
+            };
+            let config = load_config();
+            let bad_report = resolve_profile("codex", &config.profiles["codex"], &home, &bad_lookup);
+            let mut w = Vec::new();
+            let err = validate_entry_status(
+                "profile",
+                "codex",
+                &bad_report.state[0].raw,
+                &bad_report.state[0].status,
+                MissingBehavior::Create,
+                &mut w,
+            )
+            .unwrap_err();
+            assert!(
+                err.contains("profile 'codex'") && err.contains("${CODEX_HOME:-.codex}"),
+                "unexpected error for '{bad_val}': {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_merge_user_config_matches_by_written_text() {
+        let mut config = load_config();
+        // Re-declaring "${CODEX_HOME:-.codex}" matches and moves it from state to runtime
+        let user_toml_match = r#"
+            [profiles.codex]
+            runtime = ["${CODEX_HOME:-.codex}"]
+        "#;
+        let user_cfg: UserConfigData = toml::from_str(user_toml_match).unwrap();
+        merge_user_config(&mut config, user_cfg);
+        let codex = &config.profiles["codex"];
+        assert!(codex.state.is_empty(), "written text match should remove from state");
+        assert!(codex.runtime.contains(&"${CODEX_HOME:-.codex}".to_string()));
+
+        // Declaring ".codex" does NOT match "${CODEX_HOME:-.codex}"
+        let mut config2 = load_config();
+        let user_toml_nomatch = r#"
+            [profiles.codex]
+            runtime = [".codex"]
+        "#;
+        let user_cfg2: UserConfigData = toml::from_str(user_toml_nomatch).unwrap();
+        merge_user_config(&mut config2, user_cfg2);
+        assert!(
+            config2.profiles["codex"]
+                .state
+                .iter()
+                .any(|s| s.path == "${CODEX_HOME:-.codex}")
         );
     }
 }

@@ -1,8 +1,9 @@
 use cave::bwrap::{check_bwrap_available, exec_bwrap, render_args};
 use cave::cli::{parse_args, print_help, print_version, run_doctor, CliCommand};
 use cave::policy::{
-    agent_basename, build_mount_plan, load_effective_config, prepare_host_state,
-    resolve_ssh_socket, select_profiles, SshSocket,
+    agent_basename, build_mount_plan, check_tcp_port, load_effective_config, prepare_host_state,
+    resolve_profile, resolve_ssh_socket, resolve_toolchain, select_profiles, validate_entry_status,
+    MissingBehavior, SshSocket, SystemLookup,
 };
 use std::env;
 use std::path::PathBuf;
@@ -73,7 +74,7 @@ fn main() -> ExitCode {
                 }
             };
 
-            // Select profiles and check unknown names before mutating host state
+            // 1. Check profile and toolchain names before resolving or mutating host state
             let selected_profiles = match select_profiles(&opts.agent_cmd, &opts.profiles, &config) {
                 Ok(p) => p,
                 Err(e) => {
@@ -82,7 +83,6 @@ fn main() -> ExitCode {
                 }
             };
 
-            // Unknown toolchain check
             for name in &opts.with_toolchains {
                 if !config.toolchains.contains_key(name) {
                     eprintln!("Error: unknown toolchain '{name}'");
@@ -90,12 +90,107 @@ fn main() -> ExitCode {
                 }
             }
 
-            // Warn if no --profile is given and no profile matches agent basename
+            // 2. Resolve every entry of every selected profile and toolchain, and run all fatal checks
+            let mut warnings = Vec::new();
+            let mut resolved_profiles = Vec::new();
+            for name in &selected_profiles {
+                let report = resolve_profile(name, &config.profiles[name], &home, &SystemLookup);
+                for s in &report.state {
+                    if let Err(e) = validate_entry_status(
+                        "profile",
+                        name,
+                        &s.raw,
+                        &s.status,
+                        MissingBehavior::Create,
+                        &mut warnings,
+                    ) {
+                        eprintln!("{e}");
+                        return ExitCode::from(1);
+                    }
+                }
+                for r in &report.runtime {
+                    if let Err(e) = validate_entry_status(
+                        "profile",
+                        name,
+                        &r.raw,
+                        &r.status,
+                        MissingBehavior::SkipSilently,
+                        &mut warnings,
+                    ) {
+                        eprintln!("{e}");
+                        return ExitCode::from(1);
+                    }
+                }
+                resolved_profiles.push(report.to_resolved_profile());
+            }
+
+            let mut resolved_toolchains = Vec::new();
+            for name in &opts.with_toolchains {
+                let tc = &config.toolchains[name];
+                let report = resolve_toolchain(name, tc, &home, &SystemLookup);
+                for req in &report.requires {
+                    if let Err(e) = validate_entry_status(
+                        "toolchain",
+                        name,
+                        &req.raw,
+                        &req.status,
+                        MissingBehavior::Fatal,
+                        &mut warnings,
+                    ) {
+                        eprintln!("{e}");
+                        return ExitCode::from(1);
+                    }
+                }
+                for entry in &report.rw_cache {
+                    if let Err(e) = validate_entry_status(
+                        "toolchain",
+                        name,
+                        &entry.raw,
+                        &entry.status,
+                        MissingBehavior::WarnAndSkip,
+                        &mut warnings,
+                    ) {
+                        eprintln!("{e}");
+                        return ExitCode::from(1);
+                    }
+                }
+                for entry in &report.runtime {
+                    if let Err(e) = validate_entry_status(
+                        "toolchain",
+                        name,
+                        &entry.raw,
+                        &entry.status,
+                        MissingBehavior::WarnAndSkip,
+                        &mut warnings,
+                    ) {
+                        eprintln!("{e}");
+                        return ExitCode::from(1);
+                    }
+                }
+                resolved_toolchains.push(report.to_resolved_toolchain());
+            }
+
+            // 3. Emit non-fatal warnings and perform TCP checks now that all fatal checks passed
             let agent_name = agent_basename(&opts.agent_cmd);
             if opts.profiles.is_empty() && !config.profiles.contains_key(agent_name) {
                 eprintln!(
                     "Warning: no profile for agent '{agent_name}'; $HOME is ephemeral and state will not persist. Use --dir to mount host paths."
                 );
+            }
+
+            for w in &warnings {
+                eprintln!("{w}");
+            }
+
+            for name in &opts.with_toolchains {
+                for tcp in &config.toolchains[name].check_tcp {
+                    if !check_tcp_port(&tcp.addr, 50) {
+                        eprintln!(
+                            "Warning: toolchain '{name}': nothing listening on {}; {}",
+                            tcp.addr, tcp.hint
+                        );
+                    }
+                }
             }
 
             // Resolve host SSH agent socket if available and not disabled via --no-ssh
@@ -114,79 +209,13 @@ fn main() -> ExitCode {
                 }
             };
 
-            // Explicit host side-effect: prepare declared state directories/files
-            if let Err(e) = prepare_host_state(&selected_profiles, &home, &config) {
+            // 4. Explicit host side-effect: prepare declared state directories/files
+            if let Err(e) = prepare_host_state(&resolved_profiles) {
                 eprintln!("Error: failed to prepare host state paths: {e}");
                 return ExitCode::from(1);
             }
 
-            // Resolve toolchains
-            let mut resolved_toolchains = Vec::new();
-            for name in &opts.with_toolchains {
-                let tc = &config.toolchains[name];
-                let report = cave::policy::resolve_toolchain(name, tc, &home, &cave::policy::SystemLookup);
-
-                // 1. Check requires: any requires entry that is invalid or missing is fatal
-                for req in &report.requires {
-                    match &req.status {
-                        cave::policy::EntryResolution::Found(_) => {}
-                        cave::policy::EntryResolution::InvalidRootOrHome(p) => {
-                            eprintln!(
-                                "Error: toolchain '{name}' entry '{}' resolves to '{}', which is invalid (cannot mount /, $HOME, or a folder containing $HOME).",
-                                req.raw,
-                                p.display()
-                            );
-                            return ExitCode::from(1);
-                        }
-                        _ => {
-                            eprintln!("Error: toolchain '{name}' requires '{}', which could not be found.", req.raw);
-                            return ExitCode::from(1);
-                        }
-                    }
-                }
-
-                // 2. Fatal check: any rw_cache or runtime entry resolving to /, $HOME, or containing $HOME is fatal
-                let mount_entries = report
-                    .rw_cache
-                    .iter()
-                    .chain(report.runtime.iter());
-                for entry in mount_entries {
-                    if let cave::policy::EntryResolution::InvalidRootOrHome(ref p) = entry.status {
-                        eprintln!(
-                            "Error: toolchain '{name}' entry '{}' resolves to '{}', which is invalid (cannot mount /, $HOME, or a folder containing $HOME).",
-                            entry.raw,
-                            p.display()
-                        );
-                        return ExitCode::from(1);
-                    }
-                }
-
-                // Check TCP services: warn at startup if nothing listens on addr
-                for tcp in &tc.check_tcp {
-                    if !cave::policy::check_tcp_port(&tcp.addr, 50) {
-                        eprintln!(
-                            "Warning: toolchain '{name}': nothing listening on {}; {}",
-                            tcp.addr, tcp.hint
-                        );
-                    }
-                }
-
-                // Warn on unresolvable/missing rw_cache and runtime entries
-                for entry in &report.rw_cache {
-                    if !matches!(entry.status, cave::policy::EntryResolution::Found(_)) {
-                        eprintln!("Warning: toolchain '{name}' entry '{}' does not resolve; skipping.", entry.raw);
-                    }
-                }
-                for entry in &report.runtime {
-                    if !matches!(entry.status, cave::policy::EntryResolution::Found(_)) {
-                        eprintln!("Warning: toolchain '{name}' entry '{}' does not resolve; skipping.", entry.raw);
-                    }
-                }
-
-                resolved_toolchains.push(report.to_resolved_toolchain());
-            }
-
-            // Pure policy evaluation: build mount and environment plan
+            // 5. Pure policy evaluation: build mount and environment plan
             let plan = build_mount_plan(
                 &opts,
                 &home,
@@ -194,7 +223,7 @@ fn main() -> ExitCode {
                 uid,
                 &config,
                 ssh_socket.as_deref(),
-                &selected_profiles,
+                &resolved_profiles,
                 &resolved_toolchains,
             );
             let bwrap_args = render_args(&plan, &opts.agent_cmd, &opts.agent_args);
