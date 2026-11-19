@@ -2,7 +2,7 @@ use cave::bwrap::{check_bwrap_available, exec_bwrap, render_args};
 use cave::cli::{parse_args, print_help, print_version, run_doctor, CliCommand};
 use cave::policy::{
     agent_basename, build_mount_plan, load_effective_config, prepare_host_state,
-    resolve_ssh_socket, SshSocket,
+    resolve_ssh_socket, select_profiles, SshSocket,
 };
 use std::env;
 use std::path::PathBuf;
@@ -28,8 +28,11 @@ fn main() -> ExitCode {
             print_version();
             ExitCode::SUCCESS
         }
-        CliCommand::Doctor { with_toolchains } => {
-            if run_doctor(&with_toolchains) {
+        CliCommand::Doctor {
+            with_toolchains,
+            profiles,
+        } => {
+            if run_doctor(&with_toolchains, &profiles) {
                 ExitCode::SUCCESS
             } else {
                 ExitCode::from(1)
@@ -70,6 +73,15 @@ fn main() -> ExitCode {
                 }
             };
 
+            // Select profiles and check unknown names before mutating host state
+            let selected_profiles = match select_profiles(&opts.agent_cmd, &opts.profiles, &config) {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("{e}");
+                    return ExitCode::from(1);
+                }
+            };
+
             // Unknown toolchain check
             for name in &opts.with_toolchains {
                 if !config.toolchains.contains_key(name) {
@@ -78,9 +90,9 @@ fn main() -> ExitCode {
                 }
             }
 
-            // Warn if no profile matches agent basename (unknown agent fail-loudly policy)
+            // Warn if no --profile is given and no profile matches agent basename
             let agent_name = agent_basename(&opts.agent_cmd);
-            if !config.profiles.contains_key(agent_name) {
+            if opts.profiles.is_empty() && !config.profiles.contains_key(agent_name) {
                 eprintln!(
                     "Warning: no profile for agent '{agent_name}'; $HOME is ephemeral and state will not persist. Use --dir to mount host paths."
                 );
@@ -103,7 +115,7 @@ fn main() -> ExitCode {
             };
 
             // Explicit host side-effect: prepare declared state directories/files
-            if let Err(e) = prepare_host_state(&opts.agent_cmd, &home, &config) {
+            if let Err(e) = prepare_host_state(&selected_profiles, &home, &config) {
                 eprintln!("Error: failed to prepare host state paths: {e}");
                 return ExitCode::from(1);
             }
@@ -182,6 +194,7 @@ fn main() -> ExitCode {
                 uid,
                 &config,
                 ssh_socket.as_deref(),
+                &selected_profiles,
                 &resolved_toolchains,
             );
             let bwrap_args = render_args(&plan, &opts.agent_cmd, &opts.agent_args);

@@ -1,4 +1,4 @@
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsString;
 use std::fs;
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
@@ -43,7 +43,7 @@ impl HermeticFixture {
 
         // Initialize declared claude state using policy::prepare_host_state
         let default_config = cave::policy::load_config();
-        cave::policy::prepare_host_state(OsStr::new("claude"), &fake_home, &default_config).unwrap();
+        cave::policy::prepare_host_state(&["claude".to_string()], &fake_home, &default_config).unwrap();
 
         let cache_dir = fake_home.join(".cache");
         fs::create_dir_all(&cache_dir).unwrap();
@@ -1152,6 +1152,110 @@ rw_cache = ["${bin:faketool}/../.."]
         "Command must never run when 1a invalid root/home entry is encountered"
     );
 }
+
+#[test]
+fn test_multi_profile_session() {
+    let fixture = HermeticFixture::new();
+    let cave_bin = env!("CARGO_BIN_EXE_cave");
+
+    // 1. cave --profile codex claude mounts both claude's and codex's state (RW),
+    // and profile named twice (claude) mounts without error.
+    let claude_bin = fixture.fake_claude_bin.to_string_lossy().to_string();
+    let out1 = Command::new(cave_bin)
+        .args(["--profile", "codex,claude", &claude_bin, "-c"])
+        .arg(
+            r#"
+            set -eu
+            echo "from_claude" > "$HOME/.claude/multi_test.txt"
+            echo "from_codex" > "$HOME/.codex/multi_test.txt"
+            echo "__SENTINEL_DONE__"
+            "#,
+        )
+        .current_dir(&fixture.working_dir)
+        .env("HOME", &fixture.fake_home)
+        .env_remove("XDG_CONFIG_HOME")
+        .output()
+        .expect("Failed to execute cave");
+
+    assert!(
+        out1.status.success(),
+        "cave --profile codex,claude failed: stderr={}",
+        String::from_utf8_lossy(&out1.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out1.stdout).contains("__SENTINEL_DONE__"));
+    assert_eq!(
+        fs::read_to_string(fixture.fake_home.join(".claude/multi_test.txt")).unwrap(),
+        "from_claude\n"
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.fake_home.join(".codex/multi_test.txt")).unwrap(),
+        "from_codex\n"
+    );
+
+    // 2. Unknown-agent warning appears when no --profile is given, suppressed when --profile is given.
+    let unknown_agent = fixture.working_dir.join("unknown_wrapper_bin");
+    symlink("/bin/sh", &unknown_agent).unwrap();
+    let out_warn = Command::new(cave_bin)
+        .arg(&unknown_agent)
+        .args(["-c", "true"])
+        .current_dir(&fixture.working_dir)
+        .env("HOME", &fixture.fake_home)
+        .env_remove("XDG_CONFIG_HOME")
+        .output()
+        .expect("Failed to execute cave");
+    assert!(out_warn.status.success());
+    assert!(
+        String::from_utf8_lossy(&out_warn.stderr).contains("Warning: no profile for agent 'unknown_wrapper_bin'"),
+        "Expected unknown-agent warning without --profile, got: {}",
+        String::from_utf8_lossy(&out_warn.stderr)
+    );
+
+    let out_no_warn = Command::new(cave_bin)
+        .args(["--profile", "claude", &unknown_agent.to_string_lossy(), "-c", "true"])
+        .current_dir(&fixture.working_dir)
+        .env("HOME", &fixture.fake_home)
+        .env_remove("XDG_CONFIG_HOME")
+        .output()
+        .expect("Failed to execute cave");
+    assert!(out_no_warn.status.success());
+    assert!(
+        !String::from_utf8_lossy(&out_no_warn.stderr).contains("Warning: no profile for agent"),
+        "Did not expect unknown-agent warning when --profile is given, got: {}",
+        String::from_utf8_lossy(&out_no_warn.stderr)
+    );
+
+    // 3. Unknown, empty, or space-containing names exit 1 BEFORE anything is created on host.
+    let fresh_home = fixture._temp_dir.path().join("fresh_home_for_bad_profile");
+    fs::create_dir_all(&fresh_home).unwrap();
+    for bad_arg in ["bogus", "claude,,codex", "claude, codex"] {
+        let out_bad = Command::new(cave_bin)
+            .args(["--profile", bad_arg, "sh", "-c", "true"])
+            .current_dir(&fixture.working_dir)
+            .env("HOME", &fresh_home)
+            .env_remove("XDG_CONFIG_HOME")
+            .output()
+            .expect("Failed to execute cave");
+        assert_eq!(
+            out_bad.status.code(),
+            Some(1),
+            "Expected exit 1 for --profile '{bad_arg}', got {:?}, stderr={}",
+            out_bad.status.code(),
+            String::from_utf8_lossy(&out_bad.stderr)
+        );
+        if bad_arg == "claude, codex" {
+            let stderr = String::from_utf8_lossy(&out_bad.stderr);
+            assert!(
+                stderr.contains("' codex'"),
+                "Expected error naming untrimmed ' codex', got: {stderr}"
+            );
+        }
+        assert!(
+            !fresh_home.join(".claude.json").exists() && !fresh_home.join(".codex").exists(),
+            "Host state must not be created when --profile '{bad_arg}' fails"
+        );
+    }
+}
+
 
 
 

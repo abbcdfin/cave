@@ -51,7 +51,7 @@ Rationale: `docs/architecture_design.md` › Delivery Approach.
     - On the host, `pacman -U` upgrades `cave-git` from `0.1.0.r35.gac678da-1` to `0.2.0.r…` without a downgrade warning (needs the user).
     - A test pins the `--version` format; tests and clippy (`-D warnings`) green.
     - `docs/architecture_design.md`, `docs/product_specification.md` and README match what was built, including the release steps (bump, commit, tag, push) and discarding `makepkg`'s `pkgver=` rewrite.
-- [ ] Phase 8: Multi-agent sessions — `cave --profile claude,codex,agy tmux`
+- [/] Phase 8: Multi-agent sessions — `cave --profile claude,codex,agy tmux`
   - Rationale: `docs/architecture_design.md` › Filesystem & Environment Policy › Agent sessions. Accepted 2026-11-19.
   - Plan, thin path first:
     1. `--profile NAME`, repeatable and comma-separated, adds profiles to the command's own, each applied once; an unknown or empty name is fatal; no unknown-agent warning once `--profile` is given; built-in `codex` profile with a plain path.

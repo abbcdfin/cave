@@ -14,7 +14,10 @@ pub enum CliCommand {
     Run(RunOptions),
     Help,
     Version,
-    Doctor { with_toolchains: Vec<String> },
+    Doctor {
+        with_toolchains: Vec<String>,
+        profiles: Vec<String>,
+    },
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -24,6 +27,7 @@ pub struct RunOptions {
     pub agent_args: Vec<OsString>,
     pub no_ssh: bool,
     pub with_toolchains: Vec<String>,
+    pub profiles: Vec<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -31,6 +35,7 @@ pub enum CliError {
     MissingAgentCommand,
     UnknownOption(String),
     MissingOptionValue(String),
+    EmptyName(String),
     PathNotFound(PathBuf),
 }
 
@@ -45,11 +50,14 @@ impl fmt::Display for CliError {
             }
             CliError::UnknownOption(opt) => write!(f, "Error: unknown option '{opt}'"),
             CliError::MissingOptionValue(opt) => {
-                if opt == "--with" {
+                if opt == "--with" || opt == "--profile" {
                     write!(f, "Error: option '{opt}' requires a name argument")
                 } else {
                     write!(f, "Error: option '{opt}' requires a path argument")
                 }
+            }
+            CliError::EmptyName(opt) => {
+                write!(f, "Error: empty name in '{opt}'")
             }
             CliError::PathNotFound(path) => {
                 write!(f, "Error: path does not exist: {}", path.display())
@@ -60,6 +68,20 @@ impl fmt::Display for CliError {
 
 impl std::error::Error for CliError {}
 
+fn parse_name_list(opt: &str, val: OsString) -> Result<Vec<String>, CliError> {
+    let val_str = val
+        .to_str()
+        .ok_or_else(|| CliError::UnknownOption(format!("invalid utf-8 in {opt}")))?;
+    let mut names = Vec::new();
+    for part in val_str.split(',') {
+        if part.is_empty() {
+            return Err(CliError::EmptyName(opt.to_string()));
+        }
+        names.push(part.to_string());
+    }
+    Ok(names)
+}
+
 pub fn parse_args<I, T>(args: I) -> Result<CliCommand, CliError>
 where
     I: IntoIterator<Item = T>,
@@ -68,6 +90,7 @@ where
     let mut iter = args.into_iter().map(Into::into);
     let mut extra_dirs = Vec::new();
     let mut with_toolchains = Vec::new();
+    let mut profiles = Vec::new();
     let mut no_ssh = false;
     let mut is_doctor = false;
 
@@ -86,6 +109,12 @@ where
                     .to_str()
                     .ok_or_else(|| CliError::UnknownOption("invalid utf-8 in --with".into()))?;
                 with_toolchains.push(val_str.to_string());
+            }
+            Some("--profile") => {
+                let val = iter
+                    .next()
+                    .ok_or_else(|| CliError::MissingOptionValue("--profile".into()))?;
+                profiles.extend(parse_name_list("--profile", val)?);
             }
             Some("--dir") => {
                 let val = iter
@@ -107,7 +136,10 @@ where
             }
             Some("--") => {
                 if is_doctor {
-                    return Ok(CliCommand::Doctor { with_toolchains });
+                    return Ok(CliCommand::Doctor {
+                        with_toolchains,
+                        profiles,
+                    });
                 }
                 let agent_cmd = iter
                     .next()
@@ -119,6 +151,7 @@ where
                     agent_args,
                     no_ssh,
                     with_toolchains,
+                    profiles,
                 }));
             }
             Some(opt) if opt.starts_with('-') => {
@@ -126,7 +159,10 @@ where
             }
             _ => {
                 if is_doctor {
-                    return Ok(CliCommand::Doctor { with_toolchains });
+                    return Ok(CliCommand::Doctor {
+                        with_toolchains,
+                        profiles,
+                    });
                 }
                 let agent_cmd = arg;
                 let agent_args = iter.collect();
@@ -136,13 +172,17 @@ where
                     agent_args,
                     no_ssh,
                     with_toolchains,
+                    profiles,
                 }));
             }
         }
     }
 
     if is_doctor {
-        Ok(CliCommand::Doctor { with_toolchains })
+        Ok(CliCommand::Doctor {
+            with_toolchains,
+            profiles,
+        })
     } else {
         Err(CliError::MissingAgentCommand)
     }
@@ -181,6 +221,7 @@ Usage:
 Options:
     --dir PATH       Mount PATH read-write at its host path (repeatable)
     --ro-dir PATH    Mount PATH read-only at its host path (repeatable)
+    --profile NAME   Add agent profile NAME (repeatable, comma-separated)
     --with NAME      Enable toolchain NAME (repeatable)
     --no-ssh         Disable forwarding the host SSH agent socket
     --doctor         Check system prerequisites and sandbox capabilities
@@ -210,7 +251,7 @@ pub fn print_version() {
     );
 }
 
-pub fn run_doctor(with_toolchains: &[String]) -> bool {
+pub fn run_doctor(with_toolchains: &[String], _profiles: &[String]) -> bool {
     println!("cave doctor: inspecting system prerequisites and sandbox environment...\n");
     let mut ok = true;
 
@@ -299,8 +340,9 @@ pub fn run_doctor(with_toolchains: &[String]) -> bool {
                 ],
                 no_ssh: false,
                 with_toolchains: vec![],
+                profiles: vec![],
             };
-            let plan = crate::policy::build_mount_plan(&test_opts, home, &cwd, uid, config, None, &[]);
+            let plan = crate::policy::build_mount_plan(&test_opts, home, &cwd, uid, config, None, &[], &[]);
             let bwrap_args = crate::bwrap::render_args(&plan, &test_opts.agent_cmd, &test_opts.agent_args);
             let check_output = std::process::Command::new(bwrap_bin)
                 .args(&bwrap_args)
@@ -319,8 +361,9 @@ pub fn run_doctor(with_toolchains: &[String]) -> bool {
                         ],
                         no_ssh: false,
                         with_toolchains: vec![],
+                        profiles: vec![],
                     };
-                    let ext_plan = crate::policy::build_mount_plan(&ext_opts, home, &cwd, uid, config, None, &[]);
+                    let ext_plan = crate::policy::build_mount_plan(&ext_opts, home, &cwd, uid, config, None, &[], &[]);
                     let ext_args = crate::bwrap::render_args(&ext_plan, &ext_opts.agent_cmd, &ext_opts.agent_args);
                     if let Ok(ext_out) = std::process::Command::new(bwrap_bin).args(&ext_args).output() {
                         if ext_out.status.success() {
@@ -353,8 +396,9 @@ pub fn run_doctor(with_toolchains: &[String]) -> bool {
                     ],
                     no_ssh: false,
                     with_toolchains: vec![],
+                    profiles: vec![],
                 };
-                let ssh_cfg_plan = crate::policy::build_mount_plan(&ssh_cfg_opts, home, &cwd, uid, config, None, &[]);
+                let ssh_cfg_plan = crate::policy::build_mount_plan(&ssh_cfg_opts, home, &cwd, uid, config, None, &[], &[]);
                 let ssh_cfg_args = crate::bwrap::render_args(&ssh_cfg_plan, &ssh_cfg_opts.agent_cmd, &ssh_cfg_opts.agent_args);
                 match std::process::Command::new(bwrap_bin).args(&ssh_cfg_args).output() {
                     Ok(out) if out.status.success() => {
@@ -394,6 +438,7 @@ pub fn run_doctor(with_toolchains: &[String]) -> bool {
                             agent_args: vec![std::ffi::OsString::from("-l")],
                             no_ssh: false,
                             with_toolchains: vec![],
+                            profiles: vec![],
                         };
                         let ssh_plan = crate::policy::build_mount_plan(
                             &ssh_opts,
@@ -402,6 +447,7 @@ pub fn run_doctor(with_toolchains: &[String]) -> bool {
                             uid,
                             config,
                             Some(sock_path),
+                            &[],
                             &[],
                         );
                         let ssh_args = crate::bwrap::render_args(
@@ -638,7 +684,8 @@ mod tests {
         assert_eq!(
             parse_args(["--doctor"]).unwrap(),
             CliCommand::Doctor {
-                with_toolchains: vec![]
+                with_toolchains: vec![],
+                profiles: vec![],
             }
         );
     }
@@ -669,7 +716,8 @@ mod tests {
         assert_eq!(
             cmd,
             CliCommand::Doctor {
-                with_toolchains: vec!["flutter".into()]
+                with_toolchains: vec!["flutter".into()],
+                profiles: vec![],
             }
         );
 
@@ -678,7 +726,8 @@ mod tests {
         assert_eq!(
             cmd,
             CliCommand::Doctor {
-                with_toolchains: vec!["flutter".into()]
+                with_toolchains: vec!["flutter".into()],
+                profiles: vec![],
             }
         );
 
@@ -686,6 +735,48 @@ mod tests {
             parse_args(["--with"]).unwrap_err(),
             CliError::MissingOptionValue("--with".into())
         );
+    }
+
+    #[test]
+    fn test_parse_args_profiles() {
+        let cmd_comma = parse_args(["--profile", "claude,codex", "tmux"]).unwrap();
+        let cmd_repeat = parse_args(["--profile", "claude", "--profile", "codex", "tmux"]).unwrap();
+        assert_eq!(cmd_comma, cmd_repeat);
+        match cmd_comma {
+            CliCommand::Run(opts) => {
+                assert_eq!(opts.agent_cmd, OsString::from("tmux"));
+                assert_eq!(opts.profiles, vec!["claude", "codex"]);
+            }
+            _ => panic!("Expected CliCommand::Run"),
+        }
+
+        assert_eq!(
+            parse_args(["--doctor", "--profile", "claude,codex"]).unwrap(),
+            CliCommand::Doctor {
+                with_toolchains: vec![],
+                profiles: vec!["claude".into(), "codex".into()],
+            }
+        );
+
+        assert_eq!(
+            parse_args(["--profile"]).unwrap_err(),
+            CliError::MissingOptionValue("--profile".into())
+        );
+
+        for empty_case in ["", "claude,,codex", ",claude", "claude,"] {
+            assert_eq!(
+                parse_args(["--profile", empty_case, "tmux"]).unwrap_err(),
+                CliError::EmptyName("--profile".into())
+            );
+        }
+
+        // Spaces are not trimmed
+        match parse_args(["--profile", "claude, codex", "tmux"]).unwrap() {
+            CliCommand::Run(opts) => {
+                assert_eq!(opts.profiles, vec!["claude", " codex"]);
+            }
+            _ => panic!("Expected CliCommand::Run"),
+        }
     }
 
     #[test]

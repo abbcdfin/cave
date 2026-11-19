@@ -63,6 +63,13 @@ runtime = [
 path = ".aider"
 kind = "dir"
 
+[profiles.codex]
+runtime = []
+
+[[profiles.codex.state]]
+path = ".codex"
+kind = "dir"
+
 [profiles.sh]
 runtime = []
 state = []

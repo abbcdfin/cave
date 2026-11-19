@@ -262,22 +262,50 @@ pub fn agent_basename(agent_cmd: &OsStr) -> &str {
         .unwrap_or("")
 }
 
+pub fn select_profiles(
+    agent_cmd: &OsStr,
+    extra_profiles: &[String],
+    config: &ConfigData,
+) -> Result<Vec<String>, String> {
+    for name in extra_profiles {
+        if name.is_empty() || !config.profiles.contains_key(name) {
+            return Err(format!("Error: unknown profile '{name}'"));
+        }
+    }
+
+    let mut selected = Vec::new();
+    let cmd_name = agent_basename(agent_cmd);
+    if config.profiles.contains_key(cmd_name) {
+        selected.push(cmd_name.to_string());
+    }
+    for name in extra_profiles {
+        if !selected.contains(name) {
+            selected.push(name.clone());
+        }
+    }
+    Ok(selected)
+}
+
 /// Explicit host side-effect step: ensures declared state files/directories exist
 /// before mounting so they can persist, seeding files with valid initial content.
-pub fn prepare_host_state(agent_cmd: &OsStr, home_dir: &Path, config: &ConfigData) -> std::io::Result<()> {
-    let name = agent_basename(agent_cmd);
-
-    if let Some(profile) = config.profiles.get(name) {
-        for entry in &profile.state {
-            let target = home_dir.join(&entry.path);
-            if !target.exists() {
-                if entry.kind == "dir" {
-                    fs::create_dir_all(&target)?;
-                } else if entry.kind == "file" {
-                    if let Some(parent) = target.parent() {
-                        fs::create_dir_all(parent)?;
+pub fn prepare_host_state(
+    selected_profiles: &[String],
+    home_dir: &Path,
+    config: &ConfigData,
+) -> std::io::Result<()> {
+    for name in selected_profiles {
+        if let Some(profile) = config.profiles.get(name) {
+            for entry in &profile.state {
+                let target = home_dir.join(&entry.path);
+                if !target.exists() {
+                    if entry.kind == "dir" {
+                        fs::create_dir_all(&target)?;
+                    } else if entry.kind == "file" {
+                        if let Some(parent) = target.parent() {
+                            fs::create_dir_all(parent)?;
+                        }
+                        fs::write(&target, entry.init.as_deref().unwrap_or(""))?;
                     }
-                    fs::write(&target, entry.init.as_deref().unwrap_or(""))?;
                 }
             }
         }
@@ -544,6 +572,7 @@ pub fn resolve_toolchain<L: ExpansionLookup + ?Sized>(
 }
 
 /// Pure policy function: builds ordered mount plan without mutating the host filesystem or reading environment/config.
+#[allow(clippy::too_many_arguments)]
 pub fn build_mount_plan(
     options: &RunOptions,
     home_dir: &Path,
@@ -551,6 +580,7 @@ pub fn build_mount_plan(
     uid: u32,
     config: &ConfigData,
     ssh_socket: Option<&Path>,
+    selected_profiles: &[String],
     toolchains: &[ResolvedToolchain],
 ) -> MountPlan {
     let mut mounts = Vec::new();
@@ -642,29 +672,30 @@ pub fn build_mount_plan(
         }
     }
 
-    // 8. Agent Profile
-    let name = agent_basename(&options.agent_cmd);
-    if let Some(profile) = config.profiles.get(name) {
-        // State paths (Read-Write)
-        for entry in &profile.state {
-            let p = home_dir.join(&entry.path);
-            if p.exists() {
-                mounts.push(MountEntry {
-                    host_path: Some(p.clone()),
-                    target_path: p,
-                    kind: MountKind::BindReadWrite,
-                });
+    // 8. Agent Profiles (command's profile first, then --profile in order)
+    for name in selected_profiles {
+        if let Some(profile) = config.profiles.get(name) {
+            // State paths (Read-Write)
+            for entry in &profile.state {
+                let p = home_dir.join(&entry.path);
+                if p.exists() {
+                    mounts.push(MountEntry {
+                        host_path: Some(p.clone()),
+                        target_path: p,
+                        kind: MountKind::BindReadWrite,
+                    });
+                }
             }
-        }
-        // Runtime paths (Read-Only) - rendered after state so an RO subpath inside an RW state dir overrides it
-        for rel in &profile.runtime {
-            let p = home_dir.join(rel);
-            if p.exists() {
-                mounts.push(MountEntry {
-                    host_path: Some(p.clone()),
-                    target_path: p,
-                    kind: MountKind::BindReadOnly,
-                });
+            // Runtime paths (Read-Only) - rendered after state so an RO subpath inside an RW state dir overrides it
+            for rel in &profile.runtime {
+                let p = home_dir.join(rel);
+                if p.exists() {
+                    mounts.push(MountEntry {
+                        host_path: Some(p.clone()),
+                        target_path: p,
+                        kind: MountKind::BindReadOnly,
+                    });
+                }
             }
         }
     }
@@ -772,6 +803,7 @@ mod tests {
         assert!(config.defaults.ro_system.contains(&"/usr".to_string()));
         assert!(config.defaults.tmpfs.contains(&"/tmp".to_string()));
         assert!(config.profiles.contains_key("claude"));
+        assert!(config.profiles.contains_key("codex"));
         assert!(config.profiles.contains_key("agy"));
         assert!(config.profiles.contains_key("aider"));
         assert!(config.profiles.contains_key("sh"));
@@ -787,7 +819,7 @@ mod tests {
         // Initially absent
         assert!(!home.join(".claude").exists());
         let config = load_config();
-        prepare_host_state(OsStr::new("claude"), &home, &config).unwrap();
+        prepare_host_state(&["claude".to_string()], &home, &config).unwrap();
 
         // .claude is created as dir
         assert!(home.join(".claude").is_dir());
@@ -811,11 +843,12 @@ mod tests {
             agent_args: vec![],
             no_ssh: false,
             with_toolchains: vec![],
+            profiles: vec![],
         };
 
         let config = load_config();
         // Calling build_mount_plan does not create missing files on host
-        let _plan = build_mount_plan(&opts, &home, &cwd, 1000, &config, None, &[]);
+        let _plan = build_mount_plan(&opts, &home, &cwd, 1000, &config, None, &["claude".to_string()], &[]);
         assert!(!home.join(".claude").exists());
         assert!(!home.join(".claude.json").exists());
     }
@@ -838,10 +871,11 @@ mod tests {
             agent_args: vec![],
             no_ssh: false,
             with_toolchains: vec![],
+            profiles: vec![],
         };
 
         let config = load_config();
-        let plan = build_mount_plan(&opts, &home, &cwd, 1000, &config, None, &[]);
+        let plan = build_mount_plan(&opts, &home, &cwd, 1000, &config, None, &["sh".to_string()], &[]);
 
         let canonical_cwd = fs::canonicalize(&cwd).unwrap();
         let canonical_sub = fs::canonicalize(&sub).unwrap();
@@ -965,10 +999,12 @@ mod tests {
             agent_args: vec![],
             no_ssh: false,
             with_toolchains: vec![],
+            profiles: vec![],
         };
 
         let config = load_effective_config(home).expect("effective config loads");
-        let plan = build_mount_plan(&opts, home, &cwd, 1000, &config, None, &[]);
+        let selected = select_profiles(&opts.agent_cmd, &opts.profiles, &config).unwrap();
+        let plan = build_mount_plan(&opts, home, &cwd, 1000, &config, None, &selected, &[]);
 
         let mut state_idx = None;
         let mut runtime_idx = None;
@@ -1012,10 +1048,11 @@ mod tests {
             agent_args: vec![],
             no_ssh: false,
             with_toolchains: vec![],
+            profiles: vec![],
         };
 
         let config = load_config();
-        let plan = build_mount_plan(&opts, &home, &cwd, 1000, &config, Some(&sock), &[]);
+        let plan = build_mount_plan(&opts, &home, &cwd, 1000, &config, Some(&sock), &[], &[]);
 
         // 1. Target mount at /run/user/1000/ssh-agent.sock exists with BindReadOnly
         let target_sock = PathBuf::from("/run/user/1000/ssh-agent.sock");
@@ -1060,10 +1097,11 @@ mod tests {
             agent_args: vec![],
             no_ssh: false,
             with_toolchains: vec![],
+            profiles: vec![],
         };
 
         let config = load_config();
-        let plan = build_mount_plan(&opts, &home, &cwd, 1000, &config, None, &[]);
+        let plan = build_mount_plan(&opts, &home, &cwd, 1000, &config, None, &[], &[]);
 
         let target_sock = PathBuf::from("/run/user/1000/ssh-agent.sock");
         assert!(!plan.mounts.iter().any(|m| m.target_path == target_sock));
@@ -1086,12 +1124,13 @@ mod tests {
             agent_args: vec![],
             no_ssh: true,
             with_toolchains: vec![],
+            profiles: vec![],
         };
 
         let config = load_config();
         // Caller (main.rs) passes None when no_ssh is true
         let ssh_socket = if opts.no_ssh { None } else { Some(sock.as_path()) };
-        let plan = build_mount_plan(&opts, &home, &cwd, 1000, &config, ssh_socket, &[]);
+        let plan = build_mount_plan(&opts, &home, &cwd, 1000, &config, ssh_socket, &[], &[]);
 
         // When no_ssh is true, socket is NOT mounted and SSH_AUTH_SOCK is unset
         let target_sock = PathBuf::from("/run/user/1000/ssh-agent.sock");
@@ -1114,13 +1153,14 @@ mod tests {
             agent_args: vec![],
             no_ssh: false,
             with_toolchains: vec![],
+            profiles: vec![],
         };
 
         let mut config = load_config();
         let missing_path = "/nonexistent/test_tmpfs_dir_abc123";
         config.defaults.tmpfs.push(missing_path.to_string());
 
-        let plan = build_mount_plan(&opts, &home, &cwd, 1000, &config, None, &[]);
+        let plan = build_mount_plan(&opts, &home, &cwd, 1000, &config, None, &[], &[]);
 
         // Standard /tmp exists and is mounted
         assert!(plan.mounts.iter().any(|m| m.target_path == Path::new("/tmp") && m.kind == MountKind::Tmpfs));
@@ -1231,6 +1271,7 @@ mod tests {
             agent_args: vec![],
             no_ssh: false,
             with_toolchains: vec!["mytool".into()],
+            profiles: vec![],
         };
 
         let mut config = load_config();
@@ -1246,7 +1287,7 @@ mod tests {
 
         let report = resolve_toolchain("mytool", &config.toolchains["mytool"], &home, &SystemLookup);
         let resolved_tc = report.to_resolved_toolchain();
-        let plan = build_mount_plan(&opts, &home, &cwd, 1000, &config, None, &[resolved_tc]);
+        let plan = build_mount_plan(&opts, &home, &cwd, 1000, &config, None, &["sh".to_string()], &[resolved_tc]);
 
         // Toolchain rw_cache mounted as BindReadWrite
         let cache_idx = plan
@@ -1525,5 +1566,89 @@ mod tests {
         // When closed, check_tcp_port returns false
         drop(listener);
         assert!(!check_tcp_port(&addr, 50));
+    }
+
+    #[test]
+    fn test_select_profiles_order_dedup_and_unknown() {
+        let config = load_config();
+
+        // Command's profile comes first, then --profile names in order
+        let selected = select_profiles(
+            OsStr::new("claude"),
+            &["codex".into(), "agy".into()],
+            &config,
+        )
+        .unwrap();
+        assert_eq!(selected, vec!["claude", "codex", "agy"]);
+
+        // Profile named twice or matching command is applied once
+        let dedup = select_profiles(
+            OsStr::new("claude"),
+            &["codex".into(), "claude".into(), "codex".into()],
+            &config,
+        )
+        .unwrap();
+        assert_eq!(dedup, vec!["claude", "codex"]);
+
+        // Unknown command (e.g. tmux) selects only --profile names in order
+        let wrapped = select_profiles(
+            OsStr::new("tmux"),
+            &["claude".into(), "codex".into(), "claude".into()],
+            &config,
+        )
+        .unwrap();
+        assert_eq!(wrapped, vec!["claude", "codex"]);
+
+        // Unknown or untrimmed space profile fails naming the entry
+        let err = select_profiles(OsStr::new("tmux"), &[" codex".into()], &config).unwrap_err();
+        assert!(err.contains("' codex'"), "got: {err}");
+
+        let err_empty = select_profiles(OsStr::new("tmux"), &["".into()], &config).unwrap_err();
+        assert!(err_empty.contains("unknown profile ''"), "got: {err_empty}");
+    }
+
+    #[test]
+    fn test_build_mount_plan_multi_profile_order_and_once() {
+        let dir = tempdir().unwrap();
+        let home = dir.path().join("home");
+        let cwd = dir.path().join("project");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(&cwd).unwrap();
+
+        let config = load_config();
+        let opts = RunOptions {
+            extra_dirs: vec![],
+            agent_cmd: OsString::from("claude"),
+            agent_args: vec![],
+            no_ssh: false,
+            with_toolchains: vec![],
+            profiles: vec!["codex".into(), "claude".into()],
+        };
+        let selected = select_profiles(&opts.agent_cmd, &opts.profiles, &config).unwrap();
+        prepare_host_state(&selected, &home, &config).unwrap();
+
+        assert!(home.join(".claude").is_dir());
+        assert!(home.join(".claude.json").is_file());
+        assert!(home.join(".codex").is_dir());
+
+        let plan = build_mount_plan(&opts, &home, &cwd, 1000, &config, None, &selected, &[]);
+
+        let claude_mounts: Vec<_> = plan
+            .mounts
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| m.target_path == home.join(".claude"))
+            .collect();
+        assert_eq!(claude_mounts.len(), 1, "claude state should be mounted exactly once");
+
+        let codex_idx = plan
+            .mounts
+            .iter()
+            .position(|m| m.target_path == home.join(".codex"))
+            .expect("codex mount must exist");
+        assert!(
+            claude_mounts[0].0 < codex_idx,
+            "command profile (claude) must mount before --profile (codex)"
+        );
     }
 }
