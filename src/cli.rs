@@ -105,10 +105,7 @@ where
                 let val = iter
                     .next()
                     .ok_or_else(|| CliError::MissingOptionValue("--with".into()))?;
-                let val_str = val
-                    .to_str()
-                    .ok_or_else(|| CliError::UnknownOption("invalid utf-8 in --with".into()))?;
-                with_toolchains.push(val_str.to_string());
+                with_toolchains.extend(parse_name_list("--with", val)?);
             }
             Some("--profile") => {
                 let val = iter
@@ -222,7 +219,7 @@ Options:
     --dir PATH       Mount PATH read-write at its host path (repeatable)
     --ro-dir PATH    Mount PATH read-only at its host path (repeatable)
     --profile NAME   Add agent profile NAME (repeatable, comma-separated)
-    --with NAME      Enable toolchain NAME (repeatable)
+    --with NAME      Enable toolchain NAME (repeatable, comma-separated)
     --no-ssh         Disable forwarding the host SSH agent socket
     --doctor         Check system prerequisites and sandbox capabilities
     -h, --help       Print help information
@@ -251,7 +248,63 @@ pub fn print_version() {
     );
 }
 
-pub fn run_doctor(with_toolchains: &[String], _profiles: &[String]) -> bool {
+fn print_doctor_entry(
+    label: &str,
+    raw: &str,
+    status: &crate::policy::EntryResolution,
+    perm_tag: &str,
+    missing: crate::policy::MissingBehavior,
+    ok: &mut bool,
+) {
+    use crate::policy::{EntryResolution, MissingBehavior};
+    match status {
+        EntryResolution::Found(p) => {
+            println!("    [OK] {label}: '{raw}' -> {} ({perm_tag})", p.display());
+        }
+        EntryResolution::InvalidRootOrHome(p) => {
+            println!(
+                "    [FAIL] {label}: '{raw}' -> {} (resolves to /, $HOME, or a folder containing $HOME)",
+                p.display()
+            );
+            *ok = false;
+        }
+        EntryResolution::Unresolved => match missing {
+            MissingBehavior::Fatal => {
+                println!("    [FAIL] {label}: '{raw}' (does not resolve)");
+                *ok = false;
+            }
+            MissingBehavior::WarnAndSkip | MissingBehavior::Create | MissingBehavior::SkipSilently => {
+                println!("    [WARN] {label}: '{raw}' (does not resolve, skipped)");
+            }
+        },
+        EntryResolution::Missing(p) => match missing {
+            MissingBehavior::Fatal => {
+                println!("    [FAIL] {label}: '{raw}' -> {} (not found)", p.display());
+                *ok = false;
+            }
+            MissingBehavior::WarnAndSkip => {
+                println!(
+                    "    [WARN] {label}: '{raw}' -> {} (missing on host, skipped)",
+                    p.display()
+                );
+            }
+            MissingBehavior::Create => {
+                println!(
+                    "    [OK] {label}: '{raw}' -> {} (missing on host, will be created, RW)",
+                    p.display()
+                );
+            }
+            MissingBehavior::SkipSilently => {
+                println!(
+                    "    [OK] {label}: '{raw}' -> {} (missing on host, skipped silently)",
+                    p.display()
+                );
+            }
+        },
+    }
+}
+
+pub fn run_doctor(with_toolchains: &[String], profiles: &[String]) -> bool {
     println!("cave doctor: inspecting system prerequisites and sandbox environment...\n");
     let mut ok = true;
 
@@ -556,68 +609,34 @@ pub fn run_doctor(with_toolchains: &[String], _profiles: &[String]) -> bool {
                     let report = crate::policy::resolve_toolchain(name, tc, home, &crate::policy::SystemLookup);
 
                     for req in &report.requires {
-                        match &req.status {
-                            crate::policy::EntryResolution::Found(p) => {
-                                println!("    [OK] requires: '{}' -> {} (found)", req.raw, p.display());
-                            }
-                            crate::policy::EntryResolution::Missing(p) => {
-                                println!("    [FAIL] requires: '{}' -> {} (not found)", req.raw, p.display());
-                                ok = false;
-                            }
-                            crate::policy::EntryResolution::Unresolved => {
-                                println!("    [FAIL] requires: '{}' (does not resolve)", req.raw);
-                                ok = false;
-                            }
-                            crate::policy::EntryResolution::InvalidRootOrHome(p) => {
-                                println!(
-                                    "    [FAIL] requires: '{}' -> {} (resolves to /, $HOME, or a folder containing $HOME)",
-                                    req.raw, p.display()
-                                );
-                                ok = false;
-                            }
-                        }
+                        print_doctor_entry(
+                            "requires",
+                            &req.raw,
+                            &req.status,
+                            "found",
+                            crate::policy::MissingBehavior::Fatal,
+                            &mut ok,
+                        );
                     }
-
                     for entry in &report.rw_cache {
-                        match &entry.status {
-                            crate::policy::EntryResolution::Found(p) => {
-                                println!("    [OK] rw_cache: '{}' -> {} (exists, RW)", entry.raw, p.display());
-                            }
-                            crate::policy::EntryResolution::Missing(p) => {
-                                println!("    [WARN] rw_cache: '{}' -> {} (missing on host, skipped)", entry.raw, p.display());
-                            }
-                            crate::policy::EntryResolution::Unresolved => {
-                                println!("    [WARN] rw_cache: '{}' (does not resolve, skipped)", entry.raw);
-                            }
-                            crate::policy::EntryResolution::InvalidRootOrHome(p) => {
-                                println!(
-                                    "    [FAIL] rw_cache: '{}' -> {} (resolves to /, $HOME, or a folder containing $HOME)",
-                                    entry.raw, p.display()
-                                );
-                                ok = false;
-                            }
-                        }
+                        print_doctor_entry(
+                            "rw_cache",
+                            &entry.raw,
+                            &entry.status,
+                            "exists, RW",
+                            crate::policy::MissingBehavior::WarnAndSkip,
+                            &mut ok,
+                        );
                     }
-
                     for entry in &report.runtime {
-                        match &entry.status {
-                            crate::policy::EntryResolution::Found(p) => {
-                                println!("    [OK] runtime: '{}' -> {} (exists, RO)", entry.raw, p.display());
-                            }
-                            crate::policy::EntryResolution::Missing(p) => {
-                                println!("    [WARN] runtime: '{}' -> {} (missing on host, skipped)", entry.raw, p.display());
-                            }
-                            crate::policy::EntryResolution::Unresolved => {
-                                println!("    [WARN] runtime: '{}' (does not resolve, skipped)", entry.raw);
-                            }
-                            crate::policy::EntryResolution::InvalidRootOrHome(p) => {
-                                println!(
-                                    "    [FAIL] runtime: '{}' -> {} (resolves to /, $HOME, or a folder containing $HOME)",
-                                    entry.raw, p.display()
-                                );
-                                ok = false;
-                            }
-                        }
+                        print_doctor_entry(
+                            "runtime",
+                            &entry.raw,
+                            &entry.status,
+                            "exists, RO",
+                            crate::policy::MissingBehavior::WarnAndSkip,
+                            &mut ok,
+                        );
                     }
 
                     for tcp in &tc.check_tcp {
@@ -632,6 +651,43 @@ pub fn run_doctor(with_toolchains: &[String], _profiles: &[String]) -> bool {
                     }
                 } else {
                     println!("  [FAIL] unknown toolchain '{name}'");
+                    ok = false;
+                }
+            }
+        }
+    }
+
+    // 9. Profile diagnostics if requested via --profile
+    if !profiles.is_empty() {
+        println!();
+        println!("Requested profile diagnostics (--profile):");
+        if let (Some(home), Some(config)) = (&home_path, &effective_config) {
+            for name in profiles {
+                if let Some(prof) = config.profiles.get(name) {
+                    println!("  Profile '{name}':");
+                    let report = crate::policy::resolve_profile(name, prof, home, &crate::policy::SystemLookup);
+                    for entry in &report.state {
+                        print_doctor_entry(
+                            "state",
+                            &entry.raw,
+                            &entry.status,
+                            "exists, RW",
+                            crate::policy::MissingBehavior::Create,
+                            &mut ok,
+                        );
+                    }
+                    for entry in &report.runtime {
+                        print_doctor_entry(
+                            "runtime",
+                            &entry.raw,
+                            &entry.status,
+                            "exists, RO",
+                            crate::policy::MissingBehavior::SkipSilently,
+                            &mut ok,
+                        );
+                    }
+                } else {
+                    println!("  [FAIL] unknown profile '{name}'");
                     ok = false;
                 }
             }
@@ -735,6 +791,28 @@ mod tests {
             parse_args(["--with"]).unwrap_err(),
             CliError::MissingOptionValue("--with".into())
         );
+
+        // Comma-separated --with equals repeated --with
+        assert_eq!(
+            parse_args(["--with", "flutter,node", "claude"]).unwrap(),
+            parse_args(["--with", "flutter", "--with", "node", "claude"]).unwrap()
+        );
+
+        // Empty name in --with fails
+        for empty_case in ["", "flutter,,node", ",flutter", "flutter,"] {
+            assert_eq!(
+                parse_args(["--with", empty_case, "claude"]).unwrap_err(),
+                CliError::EmptyName("--with".into())
+            );
+        }
+
+        // Spaces are not trimmed
+        match parse_args(["--with", "flutter, node", "claude"]).unwrap() {
+            CliCommand::Run(opts) => {
+                assert_eq!(opts.with_toolchains, vec!["flutter", " node"]);
+            }
+            _ => panic!("Expected CliCommand::Run"),
+        }
     }
 
     #[test]

@@ -1391,6 +1391,64 @@ runtime = ["${UNSET_OPTIONAL_VAR}/cfg"]
         stderr_aider.contains("Warning: profile 'aider' entry '${UNSET_OPTIONAL_VAR}/cfg' does not resolve; skipping."),
         "Unresolvable profile entry should warn once, got: {stderr_aider}"
     );
+
+    // 7. --with comma-separated & empty/space errors
+    let out_with_empty = Command::new(cave_bin)
+        .args(["--with", "flutter,,other", "sh", "-c", "true"])
+        .current_dir(&fixture.working_dir)
+        .env("HOME", &quiet_home)
+        .env_remove("XDG_CONFIG_HOME")
+        .output()
+        .expect("Failed to execute cave");
+    assert_eq!(out_with_empty.status.code(), Some(1));
+
+    let out_with_space = Command::new(cave_bin)
+        .args(["--with", "flutter, node", "sh", "-c", "true"])
+        .current_dir(&fixture.working_dir)
+        .env("HOME", &quiet_home)
+        .env_remove("XDG_CONFIG_HOME")
+        .output()
+        .expect("Failed to execute cave");
+    assert_eq!(out_with_space.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out_with_space.stderr).contains("unknown toolchain ' node'"));
+
+    // 8. cave --doctor --profile claude,codex prints resolved entries; unknown --profile fails
+    let out_doctor_prof = Command::new(cave_bin)
+        .args(["--doctor", "--profile", "claude,codex"])
+        .current_dir(&fixture.working_dir)
+        .env("HOME", &relocated_home)
+        .env("PATH", &claude_test_path)
+        .env("CLAUDE_CONFIG_DIR", &custom_claude_dir)
+        .env("CODEX_HOME", &custom_codex_dir)
+        .env_remove("XDG_CONFIG_HOME")
+        .output()
+        .expect("Failed to execute cave --doctor --profile");
+    let doctor_stdout = String::from_utf8_lossy(&out_doctor_prof.stdout);
+    assert!(
+        doctor_stdout.contains("Requested profile diagnostics (--profile):")
+            && doctor_stdout.contains("Profile 'claude':")
+            && doctor_stdout.contains("${CLAUDE_CONFIG_DIR:-.claude}")
+            && doctor_stdout.contains(&custom_claude_dir.display().to_string())
+            && doctor_stdout.contains("${bin:claude}/..")
+            && doctor_stdout.contains(&fake_versions_dir.display().to_string())
+            && doctor_stdout.contains("Profile 'codex':")
+            && doctor_stdout.contains("${CODEX_HOME:-.codex}")
+            && doctor_stdout.contains(&custom_codex_dir.display().to_string()),
+        "Unexpected --doctor --profile output:\n{doctor_stdout}"
+    );
+
+    let out_doctor_bad_prof = Command::new(cave_bin)
+        .args(["--doctor", "--profile", "nonexistent_prof"])
+        .current_dir(&fixture.working_dir)
+        .env("HOME", &relocated_home)
+        .env_remove("XDG_CONFIG_HOME")
+        .output()
+        .expect("Failed to execute cave --doctor --profile nonexistent_prof");
+    assert_eq!(out_doctor_bad_prof.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&out_doctor_bad_prof.stdout)
+            .contains("[FAIL] unknown profile 'nonexistent_prof'")
+    );
 }
 
 
