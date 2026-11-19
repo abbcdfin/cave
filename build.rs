@@ -35,14 +35,20 @@ fn main() {
     }
 
     // Watch git files that change on a commit or a tag.
-    // Resolve their paths with `git rev-parse --git-path`:
-    // HEAD, index, packed-refs, refs/tags, and the branch ref that HEAD points to.
+    // Resolve their paths with `git rev-parse --git-path`. The refs/heads and refs/tags
+    // folders catch a branch or tag file being written or packed away, so a commit is seen
+    // whether HEAD's branch is a loose file or only in packed-refs.
+    // Only existing paths are watched: cargo treats a missing one as changed and reruns
+    // every build, and packed-refs exists only once refs have been packed.
     let git_paths_to_query = [
         "HEAD",
         "index",
         "packed-refs",
+        "refs/heads",
         "refs/tags",
     ];
+
+    let mut index_path = None;
 
     for path_key in &git_paths_to_query {
         let Ok(out) = Command::new("git")
@@ -62,47 +68,33 @@ fn main() {
                 } else {
                     manifest_dir.join(p)
                 };
-                println!("cargo:rerun-if-changed={}", abs_path.display());
-            }
-        }
-    }
-
-    // Also watch the branch ref that HEAD points to (e.g. refs/heads/main)
-    let sym_out = Command::new("git")
-        .args(["-C", manifest_dir.to_str().unwrap_or(".")])
-        .args(["symbolic-ref", "-q", "HEAD"])
-        .output();
-
-    if let Ok(sym_out) = sym_out {
-        let ref_name = String::from_utf8_lossy(&sym_out.stdout).trim().to_string();
-        if sym_out.status.success() && !ref_name.is_empty() {
-            let ref_path_out = Command::new("git")
-                .args(["-C", manifest_dir.to_str().unwrap_or(".")])
-                .args(["rev-parse", "--git-path", &ref_name])
-                .output();
-
-            if let Ok(ref_path_out) = ref_path_out {
-                let ref_path_str = String::from_utf8_lossy(&ref_path_out.stdout).trim().to_string();
-                if ref_path_out.status.success() && !ref_path_str.is_empty() {
-                    let p = Path::new(&ref_path_str);
-                    let abs_path = if p.is_absolute() {
-                        p.to_path_buf()
-                    } else {
-                        manifest_dir.join(p)
-                    };
+                if abs_path.exists() {
                     println!("cargo:rerun-if-changed={}", abs_path.display());
+                    if *path_key == "index" {
+                        index_path = Some(abs_path);
+                    }
                 }
             }
         }
     }
 
     // Query git describe --long --tags --dirty --always
-    let desc_out = Command::new("git")
+    let mut describe = Command::new("git");
+    describe
         .args(["-C", manifest_dir.to_str().unwrap_or(".")])
-        .args(["describe", "--long", "--tags", "--dirty", "--always"])
-        .output();
+        .args(["describe", "--long", "--tags", "--dirty", "--always"]);
 
-    if let Ok(out) = desc_out {
+    // `--dirty` refreshes and rewrites the index it reads. Give it a copy in OUT_DIR:
+    // rewriting the watched .git/index would rerun the next build, and a build script
+    // should not write into the source tree.
+    if let (Some(index), Some(out_dir)) = (index_path, std::env::var_os("OUT_DIR")) {
+        let copy = PathBuf::from(out_dir).join("git-index");
+        if std::fs::copy(&index, &copy).is_ok() {
+            describe.env("GIT_INDEX_FILE", &copy);
+        }
+    }
+
+    if let Ok(out) = describe.output() {
         let desc = String::from_utf8_lossy(&out.stdout).trim().to_string();
         if out.status.success() && !desc.is_empty() {
             println!("cargo:rustc-env=CAVE_GIT_DESCRIBE={desc}");
