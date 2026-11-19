@@ -32,6 +32,7 @@
   - Live verified on host (`cave --profile claude,codex,agy sh` with `claude`, `codex`, and `agy` logged in, running shell commands, and resuming sessions on host afterwards). Measured release three-profile startup overhead at 4.56 ms avg (+3.75 ms vs bare `true`, < 100 ms budget).
   - 43 unit tests and 23 boundary tests passing (66 total), 0 clippy warnings (`-D warnings`), mutation checks on applying a profile once and fatal `$HOME` verified, and `docs/` + `README.md` reconciled.
 - Phases 1–8 complete.
+- Released `v0.3.0` (2026-11-19) after Phase 8: `Cargo.toml` and `Cargo.lock` at `0.3.0`, annotated tag `v0.3.0`.
 
 ## Next Steps
 - Publish `cave-git` to the AUR.
