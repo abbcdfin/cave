@@ -2,7 +2,7 @@
 
 What each cave release changes for its users, newest first. Versions follow
 [Semantic Versioning](https://semver.org/) in its 0.x form; when to release is decided in
-[Versioning](docs/architecture_design.md#packaging--distribution). An **Upgrade** line
+[ADR 0001](docs/adr/0001-releases.md). An **Upgrade** line
 names any step a release needs.
 
 ## v0.3.0 — 2026-11-19

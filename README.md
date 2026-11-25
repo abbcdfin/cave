@@ -58,7 +58,7 @@ install -Dm755 target/release/cave ~/.local/bin/cave
   - Uncommitted changes append `-dirty`.
   - Built from source without git metadata, it prints plain `cave <version>`.
 - **Packaging (`PKGBUILD`)**: Derives `pkgver()` dynamically via `git describe --long --tags` (`0.2.0.rN.gHASH`).
-- **Branches**: `main` holds releases only; work lands on `dev`. The `cave-git` package builds `main`.
+- **Decisions**: version scheme, release channels, branches and fixes are in [ADR 0001](docs/adr/0001-releases.md); `main` holds releases only and work lands on `dev`.
 - **Release Steps** (on `dev`):
   1. Bump version in `Cargo.toml`, update `Cargo.lock` (`cargo check`), and add the release's entry to [`CHANGELOG.md`](CHANGELOG.md).
   2. Commit the three files together: this is the release commit.

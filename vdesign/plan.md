@@ -74,7 +74,7 @@ increments and stay as written; numbering continues with increment 9. Releases:
 
 ## Candidates
 <!-- Unnumbered DRAFT ideas awaiting validation -->
-- Candidate: Generic CLI fallback profile (suppress unknown-agent warning or apply default profile via --profile flag).
+- Candidate: Generic CLI fallback profile (suppress unknown-agent warning or apply default profile via --profile flag). Delivered by Phase 8 (2026-11-25): `--profile NAME` applies a profile to any command and silences the unknown-agent warning.
 - Candidate: Network policy filtering (allowlist API endpoints, block local LAN/intranet).
 - Candidate: Ephemeral git branch / copy-on-write snapshotting before agent execution.
 - Candidate: Custom target paths (`--dir SRC:DEST`, `--workdir DEST`). Deferred 2026-09-17 in favour of host paths; revisit only for a concrete need. Known costs: breaks relative paths between directories (`/work/../lib` lands on `/lib`), path-keyed agent state (`claude -c`), and absolute paths inside projects (venvs, worktrees).
