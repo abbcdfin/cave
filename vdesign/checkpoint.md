@@ -1,39 +1,20 @@
 # Checkpoint
 
 ## Current State
-- Phase 6 (Toolchains, `cave --with flutter`) complete and collapsed into `vdesign/plan.md`:
-  - Added `[toolchains.NAME]` configuration table beside `profiles` with `requires`, `rw_cache`, `runtime`, and `check_tcp` fields (`ToolchainConfig`, `UserToolchainConfig`, `TcpCheckConfig`). Layered in `merge_user_config` with append and move-between-lists rules.
-  - Repeatable `--with NAME` flag in `cli::parse_args` accepted for both execution and `--doctor`; unknown toolchain names exit 1.
-  - Toolchain mounts rendered after agent profile and before working directory in `--with` argument order, with `rw_cache` mounts preceding `runtime` mounts. `build_mount_plan` inspects candidate paths on disk and warns when the working directory is `/` or `$HOME`; `cli::check_warning` warns for such `--dir` / `--ro-dir` paths in `parse_args`.
-  - Unified toolchain entry resolution and classification in `policy::resolve_entry` and `policy::resolve_toolchain` over `ExpansionLookup` trait (`SystemLookup`), canonicalizing binaries found by `bwrap::which_binary` (which falls back to `/usr/bin` only when `PATH` is unset) and normalizing `..` lexically.
-  - Engine boundary protection: toolchain entries resolving to `/`, `$HOME`, or an ancestor containing `$HOME`, as written or through a symlink, exit 1 with a clear error without issuing `--dir` warnings. Unresolved `requires` entries exit 1 naming the missing requirement. Unresolvable or missing non-requires entries warn to stderr and are skipped.
-  - Startup TCP connectivity diagnostics via `policy::check_tcp_port` (`TcpStream::connect_timeout`). Total startup overhead with `--with flutter` measured at 10.79 ms avg (min 9.65 ms); toolchain resolution adds ~0.75 ms vs base execution (< 100 ms budget).
-  - Built-in `[toolchains.flutter]` in `src/profiles.toml` with `requires = ["${bin:flutter}", "${bin:flutter}/../../packages/flutter_tools"]`.
-  - Verified live on host:
-    - `cave --with flutter sh -c 'flutter doctor -v'` succeeded with exit code 0 finding all SDK and toolchain components with zero write errors on read-only paths.
-    - `cave --with flutter sh -c 'flutter build apk --debug'` succeeded in 14.3s, reusing Gradle caches from host build (38.9s).
-    - `cave --with flutter flutter run -d cbe5535f` connected to OnePlus 8T (`KB2000`), installed and started the app, and hot-reloaded modified `lib/main.dart` across the sandbox in 438ms.
-    - Host adb server guard refusal verified: `ADB_REJECT_KILL_SERVER=1 adb start-server` on host caused `adb kill-server` inside cave to be rejected (`error: kill-server rejected by remote server`), leaving host daemon alive.
-    - Secrets isolation verified: `~/.gradle/gradle.properties` and `~/.android/adbkey` are hidden (`No such file or directory`).
-    - `cave --doctor --with flutter` verified.
-  - 37 unit tests and 21 boundary tests passing (58 total), 0 clippy warnings (`-D warnings`). Separate mutation checks on 1a (Case 5), 1b (Case 4), and the symlink case verified.
-  - Documentation, product spec, and README reconciled.
-- Phase 7 (Versioning, `cave --version` names its build) complete and collapsed into `vdesign/plan.md`:
-  - Added `build.rs` to embed `git describe --long --tags --dirty --always` via `CAVE_GIT_DESCRIBE` only when `git rev-parse --show-toplevel` matches `CARGO_MANIFEST_DIR`, never failing if git or metadata is absent. Watched `src`, `Cargo.toml`, `build.rs`, and the git paths `HEAD`, `index`, `packed-refs`, `refs/heads`, `refs/tags` that exist; `--dirty` runs against a copy of the index in `OUT_DIR`, so a repeat build is fresh (`vdesign/utils/check_build_fresh.sh`).
-  - Added `cli::format_version` (`cave <version> (<describe>)` or plain `cave <version>`) used by `cli::print_version`.
-  - Released `v0.2.0`: bumped `Cargo.toml` and `Cargo.lock` to `0.2.0`, removed hardcoded fallback from `pkgver()` in `packaging/arch/PKGBUILD` (`makepkg` fails non-zero on tagless clones), tagged `v0.2.0` on commit `e640705`, pushed `main` and `v0.2.0` to GitHub, and built `cave-git-0.2.0.r0.ge640705-1-x86_64.pkg.tar.zst` (discarding local `pkgver=` rewrite).
-  - Verified host `pacman -U` upgrade from `0.1.0.r35.gac678da-1` with no downgrade warning; `pacman -Q cave-git` (`0.2.0.r0.ge640705-1`) and `cave --version` (`cave 0.2.0 (v0.2.0-0-ge640705)`) match.
-  - 38 unit tests and 22 boundary tests passing (60 total), 0 clippy warnings (`-D warnings`).
-  - Reconciled `docs/architecture_design.md`, `docs/product_specification.md`, and `README.md`.
-- Phase 8 (Multi-agent sessions, `cave --profile claude,codex,agy tmux`) complete and collapsed into `vdesign/plan.md`:
-  - Added repeatable, comma-separated `--profile NAME` and `--with NAME` via `cli::parse_name_list` (no trimming, empty names fatal via `CliError::EmptyName`), `policy::select_profiles` (command profile first then `--profile` in order, each applied once), and unknown-agent warning emitted only when `opts.profiles.is_empty()`.
-  - Unified profile and toolchain entry resolution via `policy::resolve_entry` (`resolve_profile`, `resolve_toolchain`, `ResolvedProfile`) with explicit `MissingBehavior` (`Fatal`, `WarnAndSkip`, `Create`, `SkipSilently`) checked in `main.rs` before `prepare_host_state(&resolved_profiles)` and `build_mount_plan(..., &resolved_profiles, &resolved_toolchains)`.
-  - Added `[profiles.codex]` (`${CODEX_HOME:-.codex}`), updated `[profiles.claude]` (`${CLAUDE_CONFIG_DIR:-.claude}`, `.claude.json`, `${bin:claude}/..`), kept `agy` unchanged, and added `--profile` diagnostics to `cli::run_doctor` via shared `print_doctor_entry`.
-  - Live verified on host (`cave --profile claude,codex,agy sh` with `claude`, `codex`, and `agy` logged in, running shell commands, and resuming sessions on host afterwards). Measured release three-profile startup overhead at 4.56 ms avg (+3.75 ms vs bare `true`, < 100 ms budget).
-  - 43 unit tests and 23 boundary tests passing (66 total), 0 clippy warnings (`-D warnings`), mutation checks on applying a profile once and fatal `$HOME` verified, and `docs/` + `README.md` reconciled.
-- Phases 1–8 complete.
-- Released `v0.3.0` (2026-11-19) after Phase 8: `Cargo.toml` and `Cargo.lock` at `0.3.0`, annotated tag `v0.3.0`.
+
+- Phases 1–8 are DONE; outcomes and verification are in [the plan](plan.md#increments).
+  Released [v0.2.0](../CHANGELOG.md#v020--2026-11-10) and
+  [v0.3.0](../CHANGELOG.md#v030--2026-11-19); `main` and `origin/main` are at `v0.3.0`.
+- Onboarded to vibe 0.12.0 (2026-11-25): `dev` created from `main`, the `pre-push` hook
+  installed, `vdesign/env.md` renamed `dev_env.md`, `constraints.md` reduced to project
+  limits, `CHANGELOG.md` backfilled, and release steps moved to the `dev` → `main` model
+  (`docs/architecture_design.md` › Versioning › Branches). `dev` is local only.
+- No increment is BUILDING. 66 tests (43 unit, 23 boundary) and clippy (`-D warnings`)
+  pass at `v0.3.0`.
 
 ## Next Steps
+
+- Push `dev` to `origin` (needs the user's approval).
 - Publish `cave-git` to the AUR.
-- Review unnumbered candidates in `vdesign/plan.md` for next increment acceptance.
+- Choose increment 9 from the candidates in `plan.md`. The "Generic CLI fallback
+  profile" candidate looks covered by Phase 8's `--profile`; confirm or reject it.

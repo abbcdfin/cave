@@ -58,11 +58,12 @@ install -Dm755 target/release/cave ~/.local/bin/cave
   - Uncommitted changes append `-dirty`.
   - Built from source without git metadata, it prints plain `cave <version>`.
 - **Packaging (`PKGBUILD`)**: Derives `pkgver()` dynamically via `git describe --long --tags` (`0.2.0.rN.gHASH`).
-- **Release Steps**:
-  1. Bump version in `Cargo.toml` and update `Cargo.lock` (`cargo check` or `cargo build`).
-  2. Commit `Cargo.toml` and `Cargo.lock`.
-  3. Create annotated tag: `git tag -a vX.Y.Z -m "cave X.Y.Z"`.
-  4. Push commit and tag: `git push origin main vX.Y.Z`.
+- **Branches**: `main` holds releases only; work lands on `dev`. The `cave-git` package builds `main`.
+- **Release Steps** (on `dev`):
+  1. Bump version in `Cargo.toml`, update `Cargo.lock` (`cargo check`), and add the release's entry to [`CHANGELOG.md`](CHANGELOG.md).
+  2. Commit the three files together: this is the release commit.
+  3. Create annotated tag: `git tag -a vX.Y.Z -m "vX.Y.Z — <summary>"`.
+  4. Fast-forward `main` and push it with `dev` and the tag: `git checkout main && git merge --ff-only dev && git push origin main dev vX.Y.Z`. The `pre-push` hook refuses `main` at an untagged commit.
   5. Run `makepkg` in `packaging/arch/`.
   6. Discard the `pkgver=` rewrite that `makepkg` leaves in `PKGBUILD`: `git checkout packaging/arch/PKGBUILD`.
 
@@ -171,5 +172,6 @@ kind = "dir"
 
 - **Product Specification (What & Why)**: [`docs/product_specification.md`](docs/product_specification.md)
 - **Architecture Design (How)**: [`docs/architecture_design.md`](docs/architecture_design.md)
-- **Roadmap & Phases**: [`vdesign/plan.md`](vdesign/plan.md)
+- **Releases**: [`CHANGELOG.md`](CHANGELOG.md)
+- **Roadmap & Increments**: [`vdesign/plan.md`](vdesign/plan.md)
 - **Session Checkpoint**: [`vdesign/checkpoint.md`](vdesign/checkpoint.md)

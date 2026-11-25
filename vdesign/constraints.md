@@ -1,22 +1,16 @@
 # Project Constraints
 
-## Decision Making
-1. **Consult first.** Check `./docs/`, `constraints.md`, `plan.md`, and `README.md` before concluding information is missing. Proceed if derivable.
-2. **Ask before assuming.** Stop and ask for irreversible choices (architecture, data model, UX flow, technology choices, placement).
-3. **Offer concrete options.** Frame questions as choices with explicit trade-offs.
-4. **Record decisions.** Record answers and rationale in `./docs/` (design docs or ADRs).
+Each limit is defined where linked; this list is the index.
 
-## Output Discipline
-- **Model first.** Express from a coherent system model rather than surface patching.
-- **Concept naming.** Reuse system names; adjust the concept and propagate rather than coining duplicates.
-- **Concise & true.** State what is true and what was done; eliminate preamble, restatement, and narration.
-- **Specific.** Name files, line ranges, symbols, values, and trade-offs.
-- **Earned length.** Say each thing once in its designated single source of truth.
-
-## Lifecycle Constraints
-- Work advances sequentially: `DRAFT` → `ACCEPTED` → `BUILDING` → `DONE` (skip nothing).
-- Unvalidated candidates must remain **unnumbered** under `## Candidates` in `plan.md` or `./vdesign/proposals/`.
-- Only accepted candidates become numbered phases in `plan.md`.
-- Active phase work is tracked in `active_plan.md` and collapsed upon completion.
-- Rejections must be recorded with their rationale rather than deleted.
-- Deferred work must be recorded immediately (scoped inline TODOs or DRAFT candidates).
+- **Linux only**, on distros that restrict unprivileged user namespaces too; no root,
+  setuid helper or daemon. [Platform](../docs/product_specification.md#platform),
+  [Isolation Engine](../docs/architecture_design.md#architectural-components).
+- **Startup overhead < 100 ms.** [Key Requirements](../docs/product_specification.md#key-requirements).
+- **Clumsy-agent threat model:** deliberate escapes and network egress are out of scope.
+  [Scope](../docs/product_specification.md#scope).
+- **`bwrap` is an external runtime dependency**, not embedded.
+  [Spike Outcomes](../docs/architecture_design.md#spike-outcomes--decisions).
+- **Clean-chroot package builds block user namespaces**, so the `PKGBUILD`'s `check()`
+  runs unit tests only. [Packaging](../docs/architecture_design.md#packaging--distribution).
+- **cave is primarily for the owner's own use**: the owner's daily agents and toolchains
+  come first. [Spike Outcomes › Implementation Language](../docs/architecture_design.md#spike-outcomes--decisions).

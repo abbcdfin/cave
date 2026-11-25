@@ -1,8 +1,10 @@
 # Project Plan — cave
 
-## Roadmap
+## Increments
 
-Rationale: `docs/architecture_design.md` › Delivery Approach.
+Rationale: `docs/architecture_design.md` › Delivery Approach. Phases 1–8 predate
+increments and stay as written; numbering continues with increment 9. Releases:
+[`CHANGELOG.md`](../CHANGELOG.md).
 
 - [x] Phase 1: Backend Spike & Decision
   - Outcome: Bubblewrap (`bwrap`) selected as isolation backend (9.28 ms startup overhead, rootless, clean tmpfs masking). Direct terminal inheritance selected (native signals/TTY passthrough, no relay). Rust selected as CLI implementation language (<2ms overhead, single static binary, `CommandExt::exec` process replacement). Loosely coupled to external `bwrap`. Reusing host `/tmp` supported via `--dir /tmp`. Spike script preserved at `vdesign/utils/spike-bwrap.sh`.
