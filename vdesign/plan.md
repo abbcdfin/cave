@@ -71,6 +71,23 @@ increments and stay as written; numbering continues with increment 9. Releases:
     - `cave --doctor --profile NAME` shows each entry and what it resolved to.
     - Unit and boundary tests cover the above, with mutation checks on the fatal `$HOME` case and on applying a profile once; tests and clippy (`-D warnings`) green; startup within the 100 ms budget.
     - `docs/architecture_design.md`, `docs/product_specification.md` and README match what was built, including the cost of a shared session.
+- [ ] Increment 9: Docker on by default — `cave claude` reaches the host Docker daemon
+  - Rationale: [ADR 0002](../docs/adr/0002-efficiency-first-docker-by-default.md); design: `docs/architecture_design.md` › Toolchains › On by default, Sockets, Built-in `docker`. Accepted 2026-11-25.
+  - Plan, thin path first:
+    1. `default = true` toolchains and `--without NAME`; the user file sets `default`; a default toolchain whose `requires` fail is skipped silently.
+    2. `sockets` entries (`unix://` bound read-only at the canonical path, other schemes skipped silently, missing socket warned) and the built-in `docker` toolchain.
+    3. `cave --doctor` lists default toolchains, sockets and whether they accept connections; boundary tests' hidden-socket check moves under `--without docker`.
+    4. Live check on the host (needs the user); reconcile design documents, README and `CHANGELOG.md`.
+  - Done when:
+    - In `cave claude` on the host, `docker ps`, `docker run --rm hello-world` and `docker compose up` in a project with a compose file work (needs the user).
+    - `cave --without docker sh -c 'docker ps'` cannot connect and `/run/docker.sock` is not visible. `--without` takes commas and repeats like `--with`; an unknown name exits 1; a name in both `--with` and `--without` exits 1.
+    - `default = false` for `docker` in the user file turns it off; `--with docker` turns it back on for a session.
+    - With `DOCKER_HOST=unix:///some/path`, that socket is mounted at its path and the default one is not; with `DOCKER_HOST=tcp://…`, nothing is mounted and nothing is warned; a missing socket gives one warning naming the path.
+    - Without `docker` on `PATH`, sessions start with no Docker mount and no warning; `cave --with docker` exits 1 naming the missing entry.
+    - `~/.docker` is not visible inside cave.
+    - `cave --doctor` shows `docker` as on by default, the resolved socket and whether it accepts connections.
+    - Unit tests and a boundary test with a test-created socket; a mutation check on `--without` removing the mount; tests and clippy (`-D warnings`) green; startup within the 100 ms budget.
+    - `docs/product_specification.md`, `docs/architecture_design.md`, README and an `Unreleased` entry in `CHANGELOG.md` match what was built; pending marks removed.
 
 ## Candidates
 <!-- Unnumbered DRAFT ideas awaiting validation -->
@@ -79,6 +96,5 @@ increments and stay as written; numbering continues with increment 9. Releases:
 - Candidate: Ephemeral git branch / copy-on-write snapshotting before agent execution.
 - Candidate: Custom target paths (`--dir SRC:DEST`, `--workdir DEST`). Deferred 2026-09-17 in favour of host paths; revisit only for a concrete need. Known costs: breaks relative paths between directories (`/work/../lib` lands on `/lib`), path-keyed agent state (`claude -c`), and absolute paths inside projects (venvs, worktrees).
 - Candidate: Opt-in Docker access for projects whose agents need `docker compose`; the socket is hidden by default (see `docs/product_specification.md` › Scope). REJECTED 2026-11-25: Docker is on by default instead ([ADR 0002](../docs/adr/0002-efficiency-first-docker-by-default.md)).
-- Candidate: Docker on by default — a built-in `docker` toolchain with a probed socket, toolchains on by default, and `--without NAME` ([ADR 0002](../docs/adr/0002-efficiency-first-docker-by-default.md)). Awaiting acceptance as increment 9.
 - Candidate: `hide = [...]` class in the profile table, so a user file can remove an inherited default instead of only downgrading it. Deferred 2026-10-22 until a concrete need; it renders as a tmpfs mount, the mechanism that already hides `$HOME`.
 - Candidate: Per-project profile file (`./.cave/profiles.toml`) behind an explicit opt-in flag. Deferred 2026-10-22: the working directory is agent-writable, so the file could widen the boundary it defines.
