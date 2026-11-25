@@ -12,6 +12,9 @@ Conversely, manual confirmation prompts destroy developer flow and create cognit
 ### The Solution
 `cave` is a transparent sandbox runner for coding agents. It wraps agent invocations (e.g. `cave claude --dangerously-skip-permissions`), confining file access to the allowed directories, while retaining the exact interactive terminal UX (colors, key bindings, TTY/PTY ergonomics) of the host system.
 
+### Priority: development efficiency
+cave exists so agents can work at full speed (decided 2026-11-25, [ADR 0002](adr/0002-efficiency-first-docker-by-default.md)). The boundary covers the mistakes that are both likely and costly to undo, chiefly reaching files outside the project, and gives way where hiding something would slow daily development. Each such exception is named in Scope with its cost and can be turned off for a session.
+
 ## Scope
 
 Decided 2026-09-17.
@@ -27,7 +30,8 @@ cave protects against an agent that *accidentally* reaches files outside the all
 - **SSH keys are usable, not readable** (decided 2026-10-23): the host ssh-agent is forwarded by default, so git over ssh works, while the key files stay hidden. `--no-ssh` turns it off for a session.
 - **Several agents can share a session** (decided 2026-11-19): `--profile NAME` adds an agent's own state beside the command's, so claude, codex and agy can work in one session. Each can then read and change the others' logins and settings; separate caves keep them apart.
 - **Toolchains are added per session** (decided 2026-11-08): `--with NAME` adds a project's toolchain, such as the built-in `flutter`. Its SDK and caches are read-write like other shared tool caches, its configuration is read-only, its credentials stay hidden, and cave stops if the toolchain is not installed. Android apps are debugged on devices the host provides, through the host's adb server. iOS and targets that open windows are out of scope.
-- Ordinary commands that reach host files through a service count as file access, so those services are hidden too: the Docker socket (`docker run -v /:/host`) and the user session bus (`systemctl --user`).
+- **Docker is available by default** (decided 2026-11-25, **pending** increment 9): the host's Docker daemon is reachable, so `docker compose` works in every session. It is the named exception to the next rule: through the daemon an agent reaches every host file (`docker run -v /:/host`) and can remove other projects' containers, images and volumes. `--without docker` turns it off for a session, and the user file turns it off for good. Docker's own configuration (`~/.docker`, which holds registry credentials) stays hidden.
+- Ordinary commands that reach host files through a service count as file access, so those services are hidden too: the user session bus (`systemctl --user`), and the Docker socket until increment 9.
 
 Out of scope:
 - Deliberate escapes: terminal input injection, `/proc` traversal, abstract-socket abuse.
@@ -42,7 +46,7 @@ Linux only for now. Other platforms may follow.
 
 - cave adds no agent flags. YOLO mode is enabled by the user passing the agent's own flag (`cave claude --dangerously-skip-permissions`), keeping that choice under the user's control.
 - Extra allowed directories are added with `--dir PATH` (read-write) or `--ro-dir PATH` (read-only), repeatable. Every allowed directory appears at its host path, so relative paths between them, absolute paths inside projects, and agent state keyed by path (`~/.claude/projects/<cwd>/`) all stay valid. There are no custom target paths. An explicitly allowed path overrides the default for that path: `--dir /tmp` shows the host's `/tmp`, and `--ro-dir .` makes the working directory read-only. cave warns on `--dir /` and `--dir ~`, which undo the boundary. A user config file (`~/.config/cave/profiles.toml`, layered with append semantics) adds paths permanently; it is user-global, never per-project, so the agent cannot reach the policy that confines it.
-- Toolchains are added with `--with NAME`, repeatable: `cave --with flutter claude`.
+- Toolchains are added with `--with NAME`, repeatable: `cave --with flutter claude`. A toolchain that is on by default is turned off with `--without NAME` (**pending** increment 9).
 - Agents are added with `--profile NAME`: `cave --profile codex,agy claude` runs claude with codex's and agy's state too. `--profile` and `--with` take a repeated option or a comma-separated list.
 - cave's own commands are options (`cave --doctor`), so no agent command name is reserved.
 - `cave --version` names the release and the exact commit the binary was built from: `cave <version> (<describe>)`, or plain `cave <version>` without git metadata.
@@ -68,3 +72,4 @@ Linux only for now. Other platforms may follow.
 
 ## Supported Toolchains
 - Flutter with Android (`flutter`)
+- Docker (`docker`), on by default (**pending** increment 9)

@@ -78,6 +78,7 @@ increments and stay as written; numbering continues with increment 9. Releases:
 - Candidate: Network policy filtering (allowlist API endpoints, block local LAN/intranet).
 - Candidate: Ephemeral git branch / copy-on-write snapshotting before agent execution.
 - Candidate: Custom target paths (`--dir SRC:DEST`, `--workdir DEST`). Deferred 2026-09-17 in favour of host paths; revisit only for a concrete need. Known costs: breaks relative paths between directories (`/work/../lib` lands on `/lib`), path-keyed agent state (`claude -c`), and absolute paths inside projects (venvs, worktrees).
-- Candidate: Opt-in Docker access for projects whose agents need `docker compose`; the socket is hidden by default (see `docs/product_specification.md` › Scope).
+- Candidate: Opt-in Docker access for projects whose agents need `docker compose`; the socket is hidden by default (see `docs/product_specification.md` › Scope). REJECTED 2026-11-25: Docker is on by default instead ([ADR 0002](../docs/adr/0002-efficiency-first-docker-by-default.md)).
+- Candidate: Docker on by default — a built-in `docker` toolchain with a probed socket, toolchains on by default, and `--without NAME` ([ADR 0002](../docs/adr/0002-efficiency-first-docker-by-default.md)). Awaiting acceptance as increment 9.
 - Candidate: `hide = [...]` class in the profile table, so a user file can remove an inherited default instead of only downgrading it. Deferred 2026-10-22 until a concrete need; it renders as a tmpfs mount, the mechanism that already hides `$HOME`.
 - Candidate: Per-project profile file (`./.cave/profiles.toml`) behind an explicit opt-in flag. Deferred 2026-10-22: the working directory is agent-writable, so the file could widen the boundary it defines.
