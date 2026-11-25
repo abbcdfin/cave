@@ -71,7 +71,7 @@ increments and stay as written; numbering continues with increment 9. Releases:
     - `cave --doctor --profile NAME` shows each entry and what it resolved to.
     - Unit and boundary tests cover the above, with mutation checks on the fatal `$HOME` case and on applying a profile once; tests and clippy (`-D warnings`) green; startup within the 100 ms budget.
     - `docs/architecture_design.md`, `docs/product_specification.md` and README match what was built, including the cost of a shared session.
-- [ ] Increment 9: Docker on by default — `cave claude` reaches the host Docker daemon
+- [/] Increment 9: Docker on by default — `cave claude` reaches the host Docker daemon
   - Rationale: [ADR 0002](../docs/adr/0002-efficiency-first-docker-by-default.md); design: `docs/architecture_design.md` › Toolchains › On by default, Sockets, Built-in `docker`. Accepted 2026-11-25.
   - Plan, thin path first:
     1. `default = true` toolchains and `--without NAME`; the user file sets `default`; a default toolchain whose `requires` fail is skipped silently.
